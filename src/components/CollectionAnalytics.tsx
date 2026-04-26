@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { TrendingUp, DollarSign, Calendar, Star } from 'lucide-react';
 import { DiscogsRelease, ReleaseDetails } from '@/types/discogs';
@@ -215,211 +216,207 @@ function formatNumber(num: number): string {
 
 export default function CollectionAnalytics({ releases, releaseDetails }: CollectionAnalyticsProps) {
   const metrics = calculateCollectionMetrics(releases, releaseDetails);
+  const [activeStatIndex, setActiveStatIndex] = useState(0);
+
+  const statCards = [
+    {
+      title: 'Total Collection Value',
+      Icon: DollarSign,
+      shellClass: 'border-green-200 bg-gradient-to-br from-green-50 to-green-100',
+      titleClass: 'text-green-800',
+      iconClass: 'text-green-600',
+      content: metrics.releasesWithPricing > 0 ? (
+        <div className="space-y-1">
+          {Array.from(metrics.totalValueByCurrency.entries())
+            .sort((a, b) => b[1].amount - a[1].amount)
+            .map(([currency, data]) => (
+              <div key={currency}>
+                <div className="text-xl font-bold text-green-900">
+                  {formatCurrency(data.amount, currency)}
+                </div>
+                <p className="text-xs text-green-700">
+                  {formatNumber(data.count)} release{data.count !== 1 ? 's' : ''} in {currency}
+                </p>
+              </div>
+            ))}
+        </div>
+      ) : (
+        <>
+          <div className="text-xl font-bold text-green-900">No pricing data</div>
+          <p className="mt-1 text-xs text-green-700">
+            {formatNumber(metrics.releasesWithoutPricing)} releases need pricing data
+          </p>
+        </>
+      ),
+    },
+    {
+      title: 'Average Release Value',
+      Icon: TrendingUp,
+      shellClass: 'border-blue-200 bg-gradient-to-br from-blue-50 to-blue-100',
+      titleClass: 'text-blue-800',
+      iconClass: 'text-blue-600',
+      content: metrics.releasesWithPricing > 0 ? (
+        <div className="space-y-1">
+          {Array.from(metrics.averageValueByCurrency.entries())
+            .sort((a, b) => b[1] - a[1])
+            .map(([currency, avgValue]) => (
+              <div key={currency}>
+                <div className="text-xl font-bold text-blue-900">
+                  {formatCurrency(avgValue, currency)}
+                </div>
+                <p className="text-xs text-blue-700">Average per {currency} release</p>
+              </div>
+            ))}
+        </div>
+      ) : (
+        <>
+          <div className="text-xl font-bold text-blue-900">N/A</div>
+          <p className="mt-1 text-xs text-blue-700">Load pricing data to see average value</p>
+        </>
+      ),
+    },
+    {
+      title: metrics.mostValuableRelease ? 'Most Valuable Release' : 'Oldest Release',
+      Icon: Star,
+      shellClass: 'border-amber-200 bg-gradient-to-br from-amber-50 to-amber-100',
+      titleClass: 'text-amber-800',
+      iconClass: 'text-amber-600',
+      content: metrics.mostValuableRelease ? (
+        <>
+          <div className="truncate text-base font-bold text-amber-900" title={metrics.mostValuableRelease.basic_information.title}>
+            {metrics.mostValuableRelease.basic_information.title}
+          </div>
+          <div className="text-sm font-semibold text-amber-800">
+            {formatCurrency(
+              (releaseDetails[metrics.mostValuableRelease.basic_information.id]?.priceInfo || metrics.mostValuableRelease.priceInfo)?.lowest_price || 0,
+              metrics.mostValuableReleaseCurrency
+            )}
+          </div>
+          <p className="mt-1 text-xs text-amber-700">
+            {metrics.mostValuableRelease.basic_information.artists[0]?.name}
+          </p>
+        </>
+      ) : metrics.oldestRelease ? (
+        <>
+          <div className="truncate text-base font-bold text-amber-900" title={metrics.oldestRelease.basic_information.title}>
+            {metrics.oldestRelease.basic_information.title}
+          </div>
+          <div className="text-sm font-semibold text-amber-800">
+            {metrics.oldestRelease.basic_information.year}
+          </div>
+          <p className="mt-1 text-xs text-amber-700">
+            {metrics.oldestRelease.basic_information.artists[0]?.name}
+          </p>
+        </>
+      ) : (
+        <div className="text-sm text-amber-700">No release data available</div>
+      ),
+    },
+    {
+      title: 'Unique Artists',
+      Icon: TrendingUp,
+      shellClass: 'border-indigo-200 bg-gradient-to-br from-indigo-50 to-indigo-100',
+      titleClass: 'text-indigo-800',
+      iconClass: 'text-indigo-600',
+      content: (
+        <>
+          <div className="text-xl font-bold text-indigo-900">{formatNumber(metrics.totalArtists)}</div>
+          <p className="mt-1 text-xs text-indigo-700">
+            Across {formatNumber(metrics.collectionGrowthRate.totalReleases)} releases
+          </p>
+        </>
+      ),
+    },
+    {
+      title: 'Unique Labels',
+      Icon: Calendar,
+      shellClass: 'border-teal-200 bg-gradient-to-br from-teal-50 to-teal-100',
+      titleClass: 'text-teal-800',
+      iconClass: 'text-teal-600',
+      content: (
+        <>
+          <div className="text-xl font-bold text-teal-900">{formatNumber(metrics.totalLabels)}</div>
+          <p className="mt-1 text-xs text-teal-700">Label diversity in collection</p>
+        </>
+      ),
+    },
+    {
+      title: 'Year Range',
+      Icon: Star,
+      shellClass: 'border-rose-200 bg-gradient-to-br from-rose-50 to-rose-100',
+      titleClass: 'text-rose-800',
+      iconClass: 'text-rose-600',
+      content: metrics.oldestRelease && metrics.newestRelease ? (
+        <>
+          <div className="text-xl font-bold text-rose-900">
+            {metrics.oldestRelease.basic_information.year} - {metrics.newestRelease.basic_information.year}
+          </div>
+          <p className="mt-1 text-xs text-rose-700">
+            {metrics.newestRelease.basic_information.year - metrics.oldestRelease.basic_information.year} year span
+          </p>
+        </>
+      ) : (
+        <div className="text-sm text-rose-700">No year data available</div>
+      ),
+    },
+    {
+      title: 'Pricing Coverage',
+      Icon: DollarSign,
+      shellClass: 'border-orange-200 bg-gradient-to-br from-orange-50 to-orange-100',
+      titleClass: 'text-orange-800',
+      iconClass: 'text-orange-600',
+      content: (
+        <>
+          <div className="text-xl font-bold text-orange-900">
+            {metrics.releasesWithPricing > 0
+              ? `${Math.round((metrics.releasesWithPricing / metrics.collectionGrowthRate.totalReleases) * 100)}%`
+              : '0%'
+            }
+          </div>
+          <p className="mt-1 text-xs text-orange-700">
+            {formatNumber(metrics.releasesWithPricing)} of {formatNumber(metrics.collectionGrowthRate.totalReleases)} releases
+          </p>
+        </>
+      ),
+    },
+  ];
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      setActiveStatIndex((currentIndex) => (currentIndex + 1) % statCards.length);
+    }, 3500);
+
+    return () => window.clearInterval(interval);
+  }, [statCards.length]);
+
+  const activeStat = statCards[activeStatIndex % statCards.length];
+  const ActiveIcon = activeStat.Icon;
   
   return (
-    <div className="space-y-6 mb-8">
-      {/* First row - Main metrics */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-      {/* Total Collection Value */}
-      <Card className="bg-gradient-to-br from-green-50 to-green-100 border-green-200">
-        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-          <CardTitle className="text-sm font-medium text-green-800">
-            Total Collection Value
+    <div className="mb-5 max-w-sm">
+      <Card className={`h-32 justify-between overflow-hidden rounded-lg py-3 transition-colors ${activeStat.shellClass}`}>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 px-3 pb-1">
+          <CardTitle className={`text-sm font-medium ${activeStat.titleClass}`}>
+            {activeStat.title}
           </CardTitle>
-          <DollarSign className="h-4 w-4 text-green-600" />
+          <ActiveIcon className={`h-4 w-4 ${activeStat.iconClass}`} />
         </CardHeader>
-        <CardContent>
-          {metrics.releasesWithPricing > 0 ? (
-            <div className="space-y-1">
-              {Array.from(metrics.totalValueByCurrency.entries())
-                .sort((a, b) => b[1].amount - a[1].amount) // Sort by amount, highest first
-                .map(([currency, data]) => (
-                  <div key={currency}>
-                    <div className="text-2xl font-bold text-green-900">
-                      {formatCurrency(data.amount, currency)}
-                    </div>
-                    <p className="text-xs text-green-700">
-                      {formatNumber(data.count)} release{data.count !== 1 ? 's' : ''} in {currency}
-                    </p>
-                  </div>
-                ))}
-            </div>
-          ) : (
-            <>
-              <div className="text-2xl font-bold text-green-900">No pricing data</div>
-              <p className="text-xs text-green-700 mt-1">
-                {formatNumber(metrics.releasesWithoutPricing)} releases need pricing data
-              </p>
-            </>
-          )}
+        <CardContent className="px-3">
+          {activeStat.content}
         </CardContent>
       </Card>
-
-      {/* Average Release Value */}
-      <Card className="bg-gradient-to-br from-blue-50 to-blue-100 border-blue-200">
-        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-          <CardTitle className="text-sm font-medium text-blue-800">
-            Average Release Value
-          </CardTitle>
-          <TrendingUp className="h-4 w-4 text-blue-600" />
-        </CardHeader>
-        <CardContent>
-          {metrics.releasesWithPricing > 0 ? (
-            <div className="space-y-1">
-              {Array.from(metrics.averageValueByCurrency.entries())
-                .sort((a, b) => b[1] - a[1]) // Sort by average value, highest first
-                .map(([currency, avgValue]) => (
-                  <div key={currency}>
-                    <div className="text-2xl font-bold text-blue-900">
-                      {formatCurrency(avgValue, currency)}
-                    </div>
-                    <p className="text-xs text-blue-700">
-                      Average per {currency} release
-                    </p>
-                  </div>
-                ))}
-            </div>
-          ) : (
-            <>
-              <div className="text-2xl font-bold text-blue-900">N/A</div>
-              <p className="text-xs text-blue-700 mt-1">
-                Load pricing data to see average value
-              </p>
-            </>
-          )}
-        </CardContent>
-      </Card>
-
-
-      {/* Most Valuable Release / Oldest Release */}
-      <Card className="bg-gradient-to-br from-amber-50 to-amber-100 border-amber-200">
-        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-          <CardTitle className="text-sm font-medium text-amber-800">
-            {metrics.mostValuableRelease ? 'Most Valuable Release' : 'Oldest Release'}
-          </CardTitle>
-          <Star className="h-4 w-4 text-amber-600" />
-        </CardHeader>
-        <CardContent>
-          {metrics.mostValuableRelease ? (
-            <>
-              <div className="text-lg font-bold text-amber-900 truncate" title={metrics.mostValuableRelease.basic_information.title}>
-                {metrics.mostValuableRelease.basic_information.title}
-              </div>
-              <div className="text-sm font-semibold text-amber-800">
-                {formatCurrency(
-                  (releaseDetails[metrics.mostValuableRelease.basic_information.id]?.priceInfo || metrics.mostValuableRelease.priceInfo)?.lowest_price || 0,
-                  metrics.mostValuableReleaseCurrency
-                )}
-              </div>
-              <p className="text-xs text-amber-700 mt-1">
-                {metrics.mostValuableRelease.basic_information.artists[0]?.name}
-              </p>
-            </>
-          ) : metrics.oldestRelease ? (
-            <>
-              <div className="text-lg font-bold text-amber-900 truncate" title={metrics.oldestRelease.basic_information.title}>
-                {metrics.oldestRelease.basic_information.title}
-              </div>
-              <div className="text-sm font-semibold text-amber-800">
-                {metrics.oldestRelease.basic_information.year}
-              </div>
-              <p className="text-xs text-amber-700 mt-1">
-                {metrics.oldestRelease.basic_information.artists[0]?.name}
-              </p>
-            </>
-          ) : (
-            <div className="text-sm text-amber-700">
-              No release data available
-            </div>
-          )}
-        </CardContent>
-      </Card>
-      </div>
-      
-      {/* Second row - Additional insights */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Total Artists */}
-        <Card className="bg-gradient-to-br from-indigo-50 to-indigo-100 border-indigo-200">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium text-indigo-800">
-              Unique Artists
-            </CardTitle>
-            <TrendingUp className="h-4 w-4 text-indigo-600" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-indigo-900">
-              {formatNumber(metrics.totalArtists)}
-            </div>
-            <p className="text-xs text-indigo-700 mt-1">
-              Across {formatNumber(metrics.collectionGrowthRate.totalReleases)} releases
-            </p>
-          </CardContent>
-        </Card>
-
-        {/* Total Labels */}
-        <Card className="bg-gradient-to-br from-teal-50 to-teal-100 border-teal-200">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium text-teal-800">
-              Unique Labels
-            </CardTitle>
-            <Calendar className="h-4 w-4 text-teal-600" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-teal-900">
-              {formatNumber(metrics.totalLabels)}
-            </div>
-            <p className="text-xs text-teal-700 mt-1">
-              Label diversity in collection
-            </p>
-          </CardContent>
-        </Card>
-
-        {/* Year Range */}
-        <Card className="bg-gradient-to-br from-rose-50 to-rose-100 border-rose-200">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium text-rose-800">
-              Year Range
-            </CardTitle>
-            <Star className="h-4 w-4 text-rose-600" />
-          </CardHeader>
-          <CardContent>
-            {metrics.oldestRelease && metrics.newestRelease ? (
-              <>
-                <div className="text-2xl font-bold text-rose-900">
-                  {metrics.oldestRelease.basic_information.year} - {metrics.newestRelease.basic_information.year}
-                </div>
-                <p className="text-xs text-rose-700 mt-1">
-                  {metrics.newestRelease.basic_information.year - metrics.oldestRelease.basic_information.year} year span
-                </p>
-              </>
-            ) : (
-              <div className="text-sm text-rose-700">
-                No year data available
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Pricing Coverage */}
-        <Card className="bg-gradient-to-br from-orange-50 to-orange-100 border-orange-200">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium text-orange-800">
-              Pricing Coverage
-            </CardTitle>
-            <DollarSign className="h-4 w-4 text-orange-600" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-orange-900">
-              {metrics.releasesWithPricing > 0 
-                ? `${Math.round((metrics.releasesWithPricing / metrics.collectionGrowthRate.totalReleases) * 100)}%`
-                : '0%'
-              }
-            </div>
-            <p className="text-xs text-orange-700 mt-1">
-              {formatNumber(metrics.releasesWithPricing)} of {formatNumber(metrics.collectionGrowthRate.totalReleases)} releases
-            </p>
-          </CardContent>
-        </Card>
+      <div className="mt-2 flex gap-1.5">
+        {statCards.map((statCard, index) => (
+          <button
+            key={statCard.title}
+            type="button"
+            onClick={() => setActiveStatIndex(index)}
+            className={`h-1.5 rounded-full transition-all ${
+              index === activeStatIndex ? 'w-5 bg-primary' : 'w-1.5 bg-muted-foreground/30'
+            }`}
+            aria-label={`Show ${statCard.title}`}
+          />
+        ))}
       </div>
     </div>
   );

@@ -18,8 +18,9 @@ import FilterDropdown, { FilterDropdownRef } from '@/components/FilterDropdown';
 import CollectionAnalytics from '@/components/CollectionAnalytics';
 import { getCachedDetails, isCached, clearCache, getCacheStats } from '@/lib/cache';
 import { isValidDiscogsUrl, isValidYouTubeUrl } from '@/lib/clientSecurity';
-import { TrendingUp } from 'lucide-react';
+import { ListMusic, TrendingUp } from 'lucide-react';
 import { toast } from 'sonner';
+import { usePlaylists } from '@/hooks/usePlaylists';
 
 // Helper function to format currency with proper symbols
 function formatCurrency(amount: number, currency: string = 'USD'): string {
@@ -109,6 +110,10 @@ interface CollectionFilters {
 
 export default function DiscogsCollection() {
   const searchParams = useSearchParams();
+  const {
+    playlists,
+    toggleReleaseInPlaylist,
+  } = usePlaylists();
   const [isLoading, setIsLoading] = useState(false);
   const [data, setData] = useState<CollectionData | null>(null);
   const [allReleasesForAnalytics, setAllReleasesForAnalytics] = useState<DiscogsRelease[]>([]);
@@ -126,14 +131,8 @@ export default function DiscogsCollection() {
   });
   const [rowsPerPage, setRowsPerPage] = useState(25);
   const [videosLoading, setVideosLoading] = useState(false);
-  const [viewMode, setViewMode] = useState<'table' | 'cards'>(() => {
-    // Load view mode from localStorage on initialization
-    if (typeof window !== 'undefined') {
-      const savedViewMode = localStorage.getItem('collectionViewMode');
-      return (savedViewMode === 'cards' || savedViewMode === 'table') ? savedViewMode : 'table';
-    }
-    return 'table';
-  });
+  const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
+  const [hasLoadedViewPreferences, setHasLoadedViewPreferences] = useState(false);
   
   // Job state
   const [jobStatus, setJobStatus] = useState<{
@@ -1076,6 +1075,76 @@ export default function DiscogsCollection() {
     );
   };
 
+  const ReleasePlaylistControls = ({ release, compact = false }: { release: DiscogsRelease; compact?: boolean }) => {
+    const releaseId = release.basic_information.id;
+    const assignedPlaylists = playlists.filter((playlist) => playlist.releaseIds.includes(releaseId));
+
+    return (
+      <div className="space-y-2">
+        <div className="flex flex-wrap items-center gap-1.5">
+          {assignedPlaylists.length > 0 ? (
+            assignedPlaylists.map((playlist) => (
+              <Link
+                key={playlist.id}
+                href={`/playlists?playlist=${playlist.id}`}
+                className="inline-flex max-w-full items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2 py-1 text-xs font-medium text-blue-800 hover:bg-blue-100"
+                title={`Open ${playlist.name}`}
+              >
+                <ListMusic className="h-3.5 w-3.5 flex-shrink-0" />
+                <span className="truncate">{playlist.name}</span>
+              </Link>
+            ))
+          ) : (
+            <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+              <ListMusic className="h-3.5 w-3.5" />
+              No playlists
+            </span>
+          )}
+        </div>
+
+        <details className="group">
+          <summary className="inline-flex cursor-pointer list-none items-center gap-1 rounded-md border bg-background px-2 py-1 text-xs font-medium hover:bg-accent">
+            <ListMusic className="h-3.5 w-3.5" />
+            {compact ? 'Add' : 'Manage playlists'}
+          </summary>
+          <div className="mt-2 min-w-48 space-y-2 rounded-md border bg-white p-2 shadow-sm">
+            {playlists.length > 0 ? (
+              playlists.map((playlist) => {
+                const checked = playlist.releaseIds.includes(releaseId);
+
+                return (
+                  <label key={playlist.id} className="flex cursor-pointer items-center gap-2 text-xs">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => {
+                        toggleReleaseInPlaylist(playlist.id, release);
+                        toast.success(
+                          checked
+                            ? `Removed from "${playlist.name}"`
+                            : `Added to "${playlist.name}"`
+                        );
+                      }}
+                      className="h-4 w-4 rounded border-gray-300"
+                    />
+                    <span className="min-w-0 flex-1 truncate">{playlist.name}</span>
+                  </label>
+                );
+              })
+            ) : (
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground">Create a playlist first.</p>
+                <Button asChild variant="outline" size="sm" className="w-full">
+                  <Link href="/playlists">Go to Playlists</Link>
+                </Button>
+              </div>
+            )}
+          </div>
+        </details>
+      </div>
+    );
+  };
+
   // Release Card Component
   const ReleaseCard = ({ release, backgroundColor = 'bg-white' }: { release: DiscogsRelease; backgroundColor?: string }) => {
     const releaseId = release.basic_information.id;
@@ -1170,6 +1239,11 @@ export default function DiscogsCollection() {
                   )}
                 </div>
               </div>
+            </div>
+
+            <div className="rounded-lg border border-blue-200 bg-white p-3">
+              <div className="mb-2 text-xs font-medium text-gray-700">Collection Playlists:</div>
+              <ReleasePlaylistControls release={release} />
             </div>
 
             {/* Tracklist */}
@@ -1572,7 +1646,7 @@ export default function DiscogsCollection() {
     ];
 
     return (
-      <div className="bg-gray-50 p-4 rounded-lg border mb-4">
+      <div className="rounded-lg border bg-gray-50 p-3">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-medium text-gray-700">Sort by:</h3>
           <button
@@ -1583,12 +1657,12 @@ export default function DiscogsCollection() {
           </button>
         </div>
         
-        <div className="flex flex-wrap gap-2">
+        <div className="grid grid-cols-1 gap-2">
           {sortOptions.map((option) => (
             <button
               key={option.value}
               onClick={() => handleSort(option.value)}
-              className={`flex items-center gap-2 px-3 py-2 text-sm rounded-md border transition-colors ${
+              className={`flex items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm transition-colors ${
                 sortColumn === option.value
                   ? 'bg-blue-600 text-white border-blue-600'
                   : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
@@ -1667,35 +1741,142 @@ export default function DiscogsCollection() {
     </div>
   );
 
+  const CollectionSidebar = () => (
+    <aside className="hidden lg:block">
+      <div className="sticky top-4 space-y-4">
+        <Card className="rounded-lg py-4">
+          <CardHeader className="px-4 pb-2">
+            <CardTitle className="text-base">Collection Tools</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 px-4">
+            <Button asChild variant="outline" className="w-full justify-start">
+              <Link href="/analytics">
+                <TrendingUp className="h-4 w-4" />
+                View Analytics
+              </Link>
+            </Button>
+            <Button asChild variant="outline" className="w-full justify-start">
+              <Link href="/playlists">
+                <ListMusic className="h-4 w-4" />
+                Playlists
+              </Link>
+            </Button>
+            <Button onClick={handleSyncCollection} disabled={isLoading} className="w-full">
+              {isLoading ? 'Fetching...' : 'Get Release Data'}
+            </Button>
+            <Button variant="outline" onClick={handleUpdateCollection} disabled={isLoading} className="w-full">
+              {isLoading ? 'Updating...' : 'Update Collection'}
+            </Button>
+            <Button variant="ghost" size="sm" onClick={syncDatabase} className="w-full">
+              Check Sync Status
+            </Button>
+            <div className="rounded-md bg-muted p-2 text-xs text-muted-foreground">
+              Database: {data?.pagination?.items || 0} releases synced
+            </div>
+            {cacheStats.totalCached > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  clearCache();
+                  setCacheStats({ totalCached: 0, cacheSize: '0 KB' });
+                  console.log('Legacy browser cache cleared successfully');
+                }}
+                className="w-full text-xs"
+                title="Clear legacy browser cache"
+              >
+                Clear Browser Cache ({cacheStats.totalCached})
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-lg py-4">
+          <CardHeader className="px-4 pb-2">
+            <CardTitle className="text-base">Display</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 px-4">
+            <ViewToggle />
+            <RowsPerPageDropdown />
+            <CardSortingControls />
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-lg py-4">
+          <CardHeader className="px-4 pb-2">
+            <CardTitle className="text-base">Filters</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 px-4">
+            {allAvailableStyles.length > 0 ? (
+              <StyleMultiSelect
+                styles={allAvailableStyles}
+                selectedStyles={selectedStyles}
+                onSelectionChange={handleStyleSelectionChange}
+                placeholder="Select styles..."
+                className="w-full"
+              />
+            ) : (
+              <div className="text-sm text-muted-foreground">
+                {isLoading ? 'Loading styles...' : 'No styles available'}
+              </div>
+            )}
+            {(selectedStyles.length > 0 || artistFilter || titleFilter || labelFilter || yearMinFilter || yearMaxFilter || dateAddedMinFilter || dateAddedMaxFilter || yearValueFilter || styleFilter.length > 0) && (
+              <Button variant="outline" onClick={clearAllFilters} disabled={isLoading} className="w-full">
+                Clear Filters
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </aside>
+  );
+
   // Note: Pagination is now handled server-side via API parameters
+
+  useEffect(() => {
+    const savedViewMode = localStorage.getItem('collectionViewMode');
+    if (savedViewMode === 'cards') {
+      setViewMode('cards');
+      setRowsPerPage(16);
+    } else if (savedViewMode === 'table') {
+      setViewMode('table');
+      setRowsPerPage(25);
+    }
+
+    setHasLoadedViewPreferences(true);
+  }, []);
 
   // Load all styles when component mounts
   useEffect(() => {
+    if (!hasLoadedViewPreferences) return;
+
     loadAllStyles();
     // Load all releases for analytics
     fetchAllReleasesForAnalytics().then(setAllReleasesForAnalytics);
-  }, []);
+  }, [hasLoadedViewPreferences]);
 
   // Auto-adjust page size when view mode changes (only for invalid options)
   useEffect(() => {
+    if (!hasLoadedViewPreferences) return;
+
     if (viewMode === 'cards') {
       // If current page size is not a valid card option, set to default
       const validCardOptions = [8, 16, 24, 32, 48];
       if (!validCardOptions.includes(rowsPerPage)) {
-        setRowsPerPage(16); // Default to 16 cards
-        // Fetch data with new page size
-        fetchCollection(selectedStyles, 1, includeDetails);
+        const defaultCardsPerPage = 16;
+        setRowsPerPage(defaultCardsPerPage);
+        fetchCollection(selectedStyles, 1, includeDetails, defaultCardsPerPage);
       }
     } else {
       // If current page size is not a valid table option, set to default
       const validTableOptions = [10, 25, 50, 75, 100];
       if (!validTableOptions.includes(rowsPerPage)) {
-        setRowsPerPage(25); // Default to 25 rows
-        // Fetch data with new page size
-        fetchCollection(selectedStyles, 1, includeDetails);
+        const defaultRowsPerPage = 25;
+        setRowsPerPage(defaultRowsPerPage);
+        fetchCollection(selectedStyles, 1, includeDetails, defaultRowsPerPage);
       }
     }
-  }, [viewMode]);
+  }, [viewMode, hasLoadedViewPreferences]);
 
   // Check for legacy browser cache on component mount
   useEffect(() => {
@@ -1774,17 +1955,16 @@ export default function DiscogsCollection() {
 
 
   return (
-    <div className="w-full space-y-6">
+    <div className="w-full">
       {/* Job Status Display */}
       <JobStatusDisplay />
-      
-      {/* Collection Analytics Dashboard */}
-      {allReleasesForAnalytics.length > 0 && (
-        <CollectionAnalytics releases={allReleasesForAnalytics} releaseDetails={releaseDetails} />
-      )}
-      
-      <Card>
-      <CardHeader>
+
+      <div className="grid gap-4 lg:grid-cols-[288px_1fr]">
+        <CollectionSidebar />
+
+        <main className="min-w-0">
+      <Card className="rounded-lg">
+      <CardHeader className="px-4 sm:px-6">
         <div className="flex items-center justify-between">
           <div>
             <CardTitle>My Discogs Collection</CardTitle>
@@ -1792,17 +1972,15 @@ export default function DiscogsCollection() {
                 Filter your collection by music styles
             </p>
           </div>
-          <Link href="/analytics">
-            <Button variant="outline" size="sm">
-              <TrendingUp className="h-4 w-4 mr-2" />
-              View Analytics
-            </Button>
-          </Link>
         </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className="px-4 sm:px-6">
         <div className="space-y-4">
-            <div className="flex flex-wrap gap-2">
+            {allReleasesForAnalytics.length > 0 && (
+              <CollectionAnalytics releases={allReleasesForAnalytics} releaseDetails={releaseDetails} />
+            )}
+
+            <div className="flex flex-wrap gap-2 lg:hidden">
           <Button
                 onClick={handleSyncCollection}
             disabled={isLoading}
@@ -1869,7 +2047,7 @@ export default function DiscogsCollection() {
 
 
                 {/* Original Style Filter (keeping for backward compatibility) */}
-                <div className="space-y-2">
+                <div className="space-y-2 lg:hidden">
                   <h3 className="text-sm font-medium">
                     Quick Style Filter:
                     {allAvailableStyles.length > 0 && (
@@ -1923,7 +2101,7 @@ export default function DiscogsCollection() {
                     })()}
 
                     <div className="space-y-4">
-                      <div className="flex justify-between items-center">
+                      <div className="flex items-center justify-between lg:hidden">
                         <div className="flex items-center gap-4">
                           <ViewToggle />
                           <RowsPerPageDropdown />
@@ -2178,6 +2356,12 @@ export default function DiscogsCollection() {
                                 {videosLoading && <Spinner />}
                               </div>
                             </TableHead>
+                            <TableHead className="whitespace-nowrap bg-background border-b">
+                              <div className="flex items-center gap-1">
+                                <span>Playlists</span>
+                                <ListMusic className="h-4 w-4 text-blue-700" />
+                              </div>
+                            </TableHead>
                             <TableHead 
                               className="whitespace-nowrap bg-background border-b cursor-pointer hover:bg-muted/50 transition-colors"
                               onClick={() => handleSort('lowest_price')}
@@ -2386,6 +2570,9 @@ export default function DiscogsCollection() {
                                   }
                                 })()}
                               </TableCell>
+                              <TableCell className="min-w-56 align-top">
+                                <ReleasePlaylistControls release={release} compact />
+                              </TableCell>
                               <TableCell className="whitespace-nowrap">
                                 {(() => {
                                   const releaseId = release.basic_information.id;
@@ -2426,11 +2613,13 @@ export default function DiscogsCollection() {
                       ) : (
                         /* Card View */
                         <div>
-                          <CardSortingControls />
+                          <div className="lg:hidden">
+                            <CardSortingControls />
+                          </div>
                           <div className="space-y-6">
                             {(() => {
                               const releases = data?.releases || [];
-                              const cardsPerRow = 4; // xl:grid-cols-4
+                              const cardsPerRow = 4;
                               const rows = [];
                               
                               for (let i = 0; i < releases.length; i += cardsPerRow) {
@@ -2440,7 +2629,7 @@ export default function DiscogsCollection() {
                                 rows.push(
                                   <div 
                                     key={`row-${i}`}
-                                    className={`grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 p-4 rounded-lg ${
+                                    className={`grid grid-cols-1 gap-4 rounded-lg p-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 ${
                                       isEvenRow ? 'bg-gray-100' : 'bg-transparent'
                                     }`}
                                   >
@@ -2554,7 +2743,8 @@ export default function DiscogsCollection() {
         </div>
       </CardContent>
     </Card>
+        </main>
+      </div>
     </div>
   );
 }
-
