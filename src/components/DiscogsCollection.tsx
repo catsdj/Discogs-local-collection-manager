@@ -2587,7 +2587,7 @@ export default function DiscogsCollection() {
                                       </div>
                                     );
                                   } else {
-                                    return <span className="text-xs text-muted-foreground">Loading...</span>;
+                                    return <span className="text-muted-foreground">No videos</span>;
                                   }
                                 })()}
                               </TableCell>
