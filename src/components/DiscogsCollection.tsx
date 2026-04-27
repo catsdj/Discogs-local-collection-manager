@@ -320,7 +320,8 @@ export default function DiscogsCollection() {
     chipClassName: string = 'bg-secondary text-secondary-foreground'
   ) => {
     const uniqueStyles = Array.from(new Set(styles));
-    const visibleStyles = uniqueStyles.slice(0, maxVisible);
+    const visibleLimit = uniqueStyles.length > maxVisible ? Math.max(1, maxVisible - 1) : maxVisible;
+    const visibleStyles = uniqueStyles.slice(0, visibleLimit);
     const hiddenCount = Math.max(0, uniqueStyles.length - visibleStyles.length);
 
     return (
@@ -337,7 +338,7 @@ export default function DiscogsCollection() {
         {hiddenCount > 0 && (
           <span
             className="rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-600"
-            title={uniqueStyles.slice(maxVisible).join(', ')}
+            title={uniqueStyles.slice(visibleLimit).join(', ')}
           >
             +{hiddenCount} more
           </span>
