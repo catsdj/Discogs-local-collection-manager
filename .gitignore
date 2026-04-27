@@ -91,6 +91,7 @@ jspm_packages/
 
 # Application data
 data/
+docs/
 
 # Build artifacts
 tsconfig.tsbuildinfo
