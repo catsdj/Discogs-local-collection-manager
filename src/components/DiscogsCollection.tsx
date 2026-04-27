@@ -1746,7 +1746,7 @@ export default function DiscogsCollection() {
       <div className="sticky top-4 space-y-4">
         <Card className="rounded-lg py-4">
           <CardHeader className="px-4 pb-2">
-            <CardTitle className="text-base">Collection Tools</CardTitle>
+            <CardTitle className="text-base">Tools</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3 px-4">
             <Button asChild variant="outline" className="w-full justify-start">
@@ -1761,14 +1761,19 @@ export default function DiscogsCollection() {
                 Playlists
               </Link>
             </Button>
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-lg py-4">
+          <CardHeader className="px-4 pb-2">
+            <CardTitle className="text-base">Actions</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 px-4">
             <Button onClick={handleSyncCollection} disabled={isLoading} className="w-full">
               {isLoading ? 'Fetching...' : 'Get Release Data'}
             </Button>
             <Button variant="outline" onClick={handleUpdateCollection} disabled={isLoading} className="w-full">
               {isLoading ? 'Updating...' : 'Update Collection'}
-            </Button>
-            <Button variant="ghost" size="sm" onClick={syncDatabase} className="w-full">
-              Check Sync Status
             </Button>
             <div className="rounded-md bg-muted p-2 text-xs text-muted-foreground">
               Database: {data?.pagination?.items || 0} releases synced
@@ -1993,9 +1998,6 @@ export default function DiscogsCollection() {
             disabled={isLoading}
           >
             {isLoading ? 'Updating...' : 'Update Collection'}
-          </Button>
-          <Button variant="ghost" size="sm" onClick={syncDatabase}>
-            Check Sync Status
           </Button>
                 {/* Database info instead of browser cache */}
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
