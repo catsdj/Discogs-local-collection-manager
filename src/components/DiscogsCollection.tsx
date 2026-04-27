@@ -15,10 +15,9 @@ import {
 } from '@/components/ui/table';
 import StyleMultiSelect from '@/components/StyleMultiSelect';
 import FilterDropdown, { FilterDropdownRef } from '@/components/FilterDropdown';
-import CollectionAnalytics from '@/components/CollectionAnalytics';
 import { getCachedDetails, isCached, clearCache, getCacheStats } from '@/lib/cache';
 import { isValidDiscogsUrl, isValidYouTubeUrl } from '@/lib/clientSecurity';
-import { ListMusic, TrendingUp } from 'lucide-react';
+import { FileText, ListMusic, TrendingUp } from 'lucide-react';
 import { toast } from 'sonner';
 import { usePlaylists } from '@/hooks/usePlaylists';
 
@@ -116,7 +115,6 @@ export default function DiscogsCollection() {
   } = usePlaylists();
   const [isLoading, setIsLoading] = useState(false);
   const [data, setData] = useState<CollectionData | null>(null);
-  const [allReleasesForAnalytics, setAllReleasesForAnalytics] = useState<DiscogsRelease[]>([]);
   const [selectedStyles, setSelectedStyles] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
@@ -184,6 +182,8 @@ export default function DiscogsCollection() {
   const [activeFilterColumn, setActiveFilterColumn] = useState<string | null>(null);
   const [filterDropdownPosition, setFilterDropdownPosition] = useState({ top: 0, left: 0 });
   const filterDropdownRef = useRef<FilterDropdownRef>(null);
+  const searchedReleaseIdsRef = useRef<Set<number>>(new Set());
+  const searchingReleaseIdRef = useRef<number | null>(null);
 
   const getActiveFilters = (): CollectionFilters => ({
     artistFilter,
@@ -525,16 +525,6 @@ export default function DiscogsCollection() {
 
   const loadAllStyles = async () => {
     await fetchCollection([], 1, true);
-  };
-
-  // Fetch all releases for analytics (without pagination)
-  const fetchAllReleasesForAnalytics = async () => {
-    try {
-      return await fetchAllCollectionPages([]);
-    } catch (error) {
-      console.error('Error fetching all releases for analytics:', error);
-      return [];
-    }
   };
 
   const handleStyleSelectionChange = (newSelectedStyles: string[]) => {
@@ -1771,6 +1761,12 @@ export default function DiscogsCollection() {
                 Playlists
               </Link>
             </Button>
+            <Button asChild variant="outline" className="w-full justify-start">
+              <Link href="/import-invoice">
+                <FileText className="h-4 w-4" />
+                Import Invoice
+              </Link>
+            </Button>
           </CardContent>
         </Card>
 
@@ -1866,8 +1862,6 @@ export default function DiscogsCollection() {
     if (!hasLoadedViewPreferences) return;
 
     loadAllStyles();
-    // Load all releases for analytics
-    fetchAllReleasesForAnalytics().then(setAllReleasesForAnalytics);
   }, [hasLoadedViewPreferences]);
 
   // Auto-adjust page size when view mode changes (only for invalid options)
@@ -1919,8 +1913,19 @@ export default function DiscogsCollection() {
   // Find release across all pages and navigate to it when coming from logs
   useEffect(() => {
     const releaseIdParam = searchParams.get('releaseId');
-    if (releaseIdParam && data?.releases) {
-      const releaseId = parseInt(releaseIdParam);
+    if (!releaseIdParam || !data?.releases) {
+      searchingReleaseIdRef.current = null;
+      return;
+    }
+
+    const releaseId = Number.parseInt(releaseIdParam, 10);
+    if (!Number.isFinite(releaseId) || releaseId <= 0) {
+      return;
+    }
+
+    if (searchedReleaseIdsRef.current.has(releaseId)) {
+      return;
+    }
       
       // First, check if the release is on the current page
       const releaseOnCurrentPage = data.releases.find(
@@ -1939,15 +1944,23 @@ export default function DiscogsCollection() {
             }, 3000);
           }
         }, 100);
+        searchedReleaseIdsRef.current.add(releaseId);
       } else if (data.pagination && currentPage === 1) {
         // Release not on current page, search for it
-        searchForRelease(releaseId);
+        if (searchingReleaseIdRef.current === releaseId) {
+          return;
+        }
+
+        searchingReleaseIdRef.current = releaseId;
+        searchForRelease(releaseId).finally(() => {
+          searchedReleaseIdsRef.current.add(releaseId);
+          searchingReleaseIdRef.current = null;
+        });
       }
-    }
   }, [searchParams, data?.releases, currentPage]);
   
   // Function to search for a release across all pages
-  const searchForRelease = async (releaseId: number) => {
+  const searchForRelease = async (releaseId: number): Promise<boolean> => {
     try {
       const allReleases = await fetchAllCollectionPages(selectedStyles);
       const releaseIndex = allReleases.findIndex(
@@ -1960,10 +1973,12 @@ export default function DiscogsCollection() {
           setCurrentPage(targetPage);
           fetchCollection(selectedStyles, targetPage, includeDetails, rowsPerPage);
         }
+        return true;
       }
     } catch (error) {
       console.error('Error searching for release:', error);
     }
+    return false;
   };
 
   // Note: Pagination reset is now handled server-side when filters/sorting change
@@ -1991,10 +2006,6 @@ export default function DiscogsCollection() {
       </CardHeader>
       <CardContent className="px-4 sm:px-6">
         <div className="space-y-4">
-            {allReleasesForAnalytics.length > 0 && (
-              <CollectionAnalytics releases={allReleasesForAnalytics} releaseDetails={releaseDetails} />
-            )}
-
             <div className="flex flex-wrap gap-2 lg:hidden">
           <Button
                 onClick={handleSyncCollection}
