@@ -314,25 +314,36 @@ export default function DiscogsCollection() {
     return lines.join('\n');
   };
 
-  // Helper function to render styles with line breaks after every 3 styles
-  const renderStyles = (styles: string[]) => {
-    const chunks = [];
-    for (let i = 0; i < styles.length; i += 3) {
-      chunks.push(styles.slice(i, i + 3));
-    }
-    
-    return chunks.map((chunk, chunkIndex) => (
-      <div key={chunkIndex} className="flex flex-wrap gap-1 mb-1 last:mb-0">
-        {chunk.map((style, index) => (
+  const renderStyleChips = (
+    styles: string[],
+    maxVisible: number = 4,
+    chipClassName: string = 'bg-secondary text-secondary-foreground'
+  ) => {
+    const uniqueStyles = Array.from(new Set(styles));
+    const visibleStyles = uniqueStyles.slice(0, maxVisible);
+    const hiddenCount = Math.max(0, uniqueStyles.length - visibleStyles.length);
+
+    return (
+      <div className="flex h-14 flex-wrap content-start gap-1 overflow-hidden">
+        {visibleStyles.map((style) => (
           <span
-            key={index}
-            className="px-2 py-1 bg-secondary text-secondary-foreground text-xs rounded"
+            key={style}
+            className={`max-w-32 truncate rounded px-2 py-1 text-xs ${chipClassName}`}
+            title={style}
           >
             {style}
           </span>
         ))}
+        {hiddenCount > 0 && (
+          <span
+            className="rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-600"
+            title={uniqueStyles.slice(maxVisible).join(', ')}
+          >
+            +{hiddenCount} more
+          </span>
+        )}
       </div>
-    ));
+    );
   };
 
   // Note: Sorting is now handled server-side via API parameters
@@ -1203,16 +1214,11 @@ export default function DiscogsCollection() {
                   {/* Styles */}
                   <div>
                     <div className="text-sm font-medium text-gray-700 mb-1">Styles:</div>
-                    <div className="flex flex-wrap gap-1">
-                      {release.basic_information.styles.map((style, index) => (
-                        <span
-                          key={index}
-                          className="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded border border-blue-200"
-                        >
-                          {style}
-                        </span>
-                      ))}
-                    </div>
+                    {renderStyleChips(
+                      release.basic_information.styles,
+                      4,
+                      'border border-blue-200 bg-blue-100 text-blue-800'
+                    )}
                   </div>
                   </div>
                 </div>
@@ -2438,9 +2444,7 @@ export default function DiscogsCollection() {
                                 </div>
                               </TableCell>
                               <TableCell className="w-32">
-                                <div className="space-y-1">
-                                  {renderStyles(release.basic_information.styles)}
-                                </div>
+                                {renderStyleChips(release.basic_information.styles, 5)}
                               </TableCell>
                               <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
                                 {new Date(release.date_added).toLocaleDateString()}
