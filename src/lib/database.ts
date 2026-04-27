@@ -504,8 +504,19 @@ export class DiscogsDatabase {
   // Release CRUD operations
   async createRelease(releaseData: Omit<ReleaseRecord, 'id' | 'created_at' | 'updated_at'>): Promise<number> {
     const stmt = this.db.prepare(`
-      INSERT INTO releases (discogs_id, title, year, cover_image_url, date_added, last_sync_at, sync_status, metadata_version)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO releases (
+        discogs_id,
+        title,
+        year,
+        cover_image_url,
+        date_added,
+        media_condition,
+        sleeve_condition,
+        last_sync_at,
+        sync_status,
+        metadata_version
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     
     const result = stmt.run(
@@ -514,6 +525,8 @@ export class DiscogsDatabase {
       releaseData.year,
       releaseData.cover_image_url,
       releaseData.date_added,
+      releaseData.media_condition,
+      releaseData.sleeve_condition,
       releaseData.last_sync_at,
       releaseData.sync_status,
       releaseData.metadata_version
