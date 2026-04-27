@@ -1195,7 +1195,10 @@ export default function DiscogsCollection() {
                   </h3>
                   
                   {/* Artist */}
-                  <p className="text-sm text-gray-700 font-medium">
+                  <p
+                    className="line-clamp-2 min-h-10 text-sm font-medium leading-5 text-gray-700"
+                    title={release.basic_information.artists.map(artist => artist.name).join(', ')}
+                  >
                     {release.basic_information.artists.map(artist => artist.name).join(', ')}
                   </p>
                   
