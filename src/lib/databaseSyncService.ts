@@ -216,10 +216,22 @@ class DatabaseSyncService {
       console.log('💡 Use "Update Collection" to check for new releases and update conditions\n');
 
       // Get releases that need price/video updates (NOT conditions - that's in Update Collection job)
-      // This is the "Get Release Data" job - fetches marketplace prices and videos only
+      // This is the "Get Release Data" job - fetches marketplace prices and videos only.
+      // Existing marketplace prices are refreshed after 1 week so stale prices do not linger indefinitely.
       const releasesToSync = db.getDb().prepare(`
         SELECT r.id, r.discogs_id, r.title, r.last_sync_at, r.sync_status, r.media_condition, r.sleeve_condition,
-               CASE WHEN p.id IS NULL OR (p.lowest_price IS NULL AND (p.no_listing_available = 0 OR p.no_listing_available IS NULL)) THEN 1 ELSE 0 END as missing_price,
+               CASE WHEN (
+                 p.id IS NULL
+                 OR (p.lowest_price IS NULL AND (p.no_listing_available = 0 OR p.no_listing_available IS NULL))
+                 OR (
+                   p.lowest_price IS NOT NULL
+                   AND (
+                     p.last_marketplace_check IS NULL
+                     OR datetime(p.last_marketplace_check) < datetime('now', '-7 days')
+                     OR COALESCE(p.price_stale, 0) = 1
+                   )
+                 )
+               ) THEN 1 ELSE 0 END as missing_price,
                0 as missing_condition,
                (SELECT COUNT(*) FROM videos v WHERE v.release_id = r.id) as video_count,
                (SELECT COUNT(*) FROM tracks t WHERE t.release_id = r.id) as track_count,
@@ -229,8 +241,19 @@ class DatabaseSyncService {
         FROM releases r
         LEFT JOIN prices p ON r.id = p.release_id
         WHERE (
-          -- Missing price AND not flagged as unavailable
-          (p.id IS NULL OR (p.lowest_price IS NULL AND (p.no_listing_available = 0 OR p.no_listing_available IS NULL)))
+          -- Missing price, stale existing price, or price due for refresh
+          (
+            p.id IS NULL
+            OR (p.lowest_price IS NULL AND (p.no_listing_available = 0 OR p.no_listing_available IS NULL))
+            OR (
+              p.lowest_price IS NOT NULL
+              AND (
+                p.last_marketplace_check IS NULL
+                OR datetime(p.last_marketplace_check) < datetime('now', '-7 days')
+                OR COALESCE(p.price_stale, 0) = 1
+              )
+            )
+          )
           -- Missing videos AND not flagged as unavailable
           OR (NOT EXISTS (SELECT 1 FROM videos v WHERE v.release_id = r.id) AND (r.no_videos_available = 0 OR r.no_videos_available IS NULL))
           -- Missing tracklist (always try - tracklist should always exist)
@@ -251,13 +274,13 @@ class DatabaseSyncService {
         track_count: number;
       }>;
 
-      const missingPrices = releasesToSync.filter(r => r.missing_price).length;
+      const pricesToRefresh = releasesToSync.filter(r => r.missing_price).length;
       const missingVideos = releasesToSync.filter(r => r.video_count === 0).length;
       const missingTracks = releasesToSync.filter(r => r.track_count === 0).length;
 
       this.jobStatus.total = releasesToSync.length;
       console.log(`📊 "Get Release Data" job - Found ${releasesToSync.length} releases to sync:`);
-      console.log(`   💰 ${missingPrices} missing prices`);
+      console.log(`   💰 ${pricesToRefresh} prices missing or due for refresh`);
       console.log(`   🎥 ${missingVideos} missing videos`);
       console.log(`   🎵 ${missingTracks} missing tracklist`);
       console.log(`   (Conditions handled by "Update Collection" job)`);
@@ -277,7 +300,7 @@ class DatabaseSyncService {
           console.log(`🔄 Syncing release ${i + 1}/${releasesToSync.length}: "${release.title}" (ID: ${release.discogs_id})`);
           
           const missingItems = [];
-          if (release.missing_price) missingItems.push('💰 price');
+          if (release.missing_price) missingItems.push('💰 price refresh');
           if (release.video_count === 0) missingItems.push('🎥 videos');
           if (release.track_count === 0) missingItems.push('🎵 tracklist');
           
