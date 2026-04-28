@@ -1,6 +1,7 @@
 // Cache synchronization and invalidation system
 import { getCachedReleaseFromServer, saveReleaseToServerCache, loadServerCache } from './serverCache';
 import { recordSyncRequest, recordSyncResponse, recordCacheHit, recordCacheMiss, recordSyncError } from './monitoring';
+import { config } from './config';
 
 export interface CacheSyncConfig {
   // Price refresh intervals (more frequent for price-sensitive data)
@@ -158,7 +159,7 @@ export async function refreshReleaseCache(
     // Prepare headers for Discogs API request
     const headers: Record<string, string> = {
       'Authorization': `Discogs token=${discogsToken}`,
-      'User-Agent': 'DiscogsCollectionManager/1.0 (https://github.com/catsdj/Discogs-collection-manager)',
+      'User-Agent': config.userAgent,
     };
     
     // Fetch fresh data from Discogs

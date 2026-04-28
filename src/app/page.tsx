@@ -17,6 +17,22 @@ export default function Home() {
             <DiscogsCollection />
           </Suspense>
         </main>
+
+        <footer className="mt-8 rounded-md border bg-background/70 p-3 text-xs text-muted-foreground">
+          <p>
+            Data provided by{' '}
+            <a
+              href="https://www.discogs.com/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline"
+            >
+              Discogs
+            </a>
+            . This application uses Discogs&apos; API but is not affiliated with, sponsored or endorsed by Discogs.
+            &nbsp;&ldquo;Discogs&rdquo; is a trademark of Zink Media, LLC.
+          </p>
+        </footer>
       </div>
     </div>
   );

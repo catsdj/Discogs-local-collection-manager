@@ -50,7 +50,7 @@ export const config = {
   discogsToken: env.DISCOGS_API_TOKEN,
   discogsUsername: env.DISCOGS_USERNAME,
   // User-Agent format: AppName/Version +URL or Email
-  userAgent: `DiscogsCollectionManager/1.0 +https://discogs.com/user/${env.DISCOGS_USERNAME}`,
+  userAgent: 'DiscogsLocalCollectionManager/1.0 +https://github.com/catsdj/Discogs-local-collection-manager',
 };
 
 /**

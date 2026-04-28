@@ -74,7 +74,7 @@ npm run setup
 npm run dev
 ```
 
-If you prefer manual setup, copy `[env.example](env.example)` to `.env.local` and set:
+If you prefer manual setup, copy [`env.example`](env.example) to `.env.local` and set:
 
 - `DISCOGS_API_TOKEN`
 - `DISCOGS_USERNAME`
@@ -107,7 +107,14 @@ Create a Discogs token at [Discogs developer settings](https://www.discogs.com/s
 
 ## Release notes
 
-See `[CHANGELOG.md](CHANGELOG.md)` for release history and unreleased changes.
+See [`CHANGELOG.md`](CHANGELOG.md) for release history and unreleased changes.
+
+## Discogs API compliance notes
+
+- Intended usage is local/personal collection management.
+- Requests identify the app with a dedicated `User-Agent` and handle `429` rate-limit responses.
+- The UI displays Discogs attribution and non-affiliation notice.
+- The app stores local sync/cache data only to provide the service; do not redistribute Discogs-derived datasets.
 
 ## Repository notes
 
@@ -115,4 +122,4 @@ See `[CHANGELOG.md](CHANGELOG.md)` for release history and unreleased changes.
 
 ## License
 
-MIT — see `[LICENSE](LICENSE)`.
+MIT — see [`LICENSE`](LICENSE).
