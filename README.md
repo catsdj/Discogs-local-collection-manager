@@ -1,6 +1,70 @@
 # Discogs Collection Manager
 
-Next.js app to browse and manage your Discogs vinyl collection with table/card browsing, analytics, playlists, and local sync tooling.
+Discogs Collection Manager is a Next.js application for managing a vinyl collection locally using the Discogs API, a local SQLite database, and a UI optimized for browsing, filtering, syncing, and enrichment workflows.
+
+This is WIP. Bugs and inconsistencies may be present :)
+
+## High-level features
+
+### Collection experience
+
+- Table and card layouts for browsing your full Discogs collection
+- Rich release presentation: artists, labels, styles, year, condition, pricing, and media links
+- Discogs deep links from each release row/card
+- Pagination controls with adjustable page size
+
+### Search, filter, and sort
+
+- Multi-field filtering for:
+  - styles
+  - artist
+  - title
+  - label
+  - year range and exact year
+  - date added range
+- Column-based sorting in collection views (date, title, artist, styles, condition, price, etc.)
+- Quick filter reset and stateful filtering UX
+
+### Data sync and enrichment
+
+- Local database sync workflows for:
+  - release data refresh
+  - collection updates from Discogs
+  - metadata backfill jobs
+- Price synchronization with stale-price refresh handling
+- Video and tracklist enrichment pipelines
+- Sync job progress/status feedback in the UI
+
+### Analytics and insights
+
+- Dedicated analytics page for collection trend exploration
+- Year-based aggregation and monthly breakdowns
+- Collection value summaries and metrics
+- Loading/error handling for long-running analytics fetches
+
+### Playlists and media workflows
+
+- Playlist management integrated with collection releases
+- Release-level playlist controls
+- YouTube and Discogs video handling in release displays
+
+### Invoice import pipeline
+
+- Invoice import UI and API flow for deejay.de invoice ingestion
+- Parsing and normalization utilities for invoice data
+- Integration path into collection/database workflows
+
+### Security and local-first design
+
+- Local-request protection on API routes (designed for local/private usage)
+- Environment-driven secrets (`.env.local`) with setup helper
+- Security-oriented utility modules and hardened defaults
+
+### Performance and reliability
+
+- SQLite (`better-sqlite3`) for fast local reads/writes
+- Database indexes and migration scripts for evolving schema/performance
+- Caching and sync control utilities for heavy collection operations
 
 ## Quick start
 
@@ -10,36 +74,45 @@ npm run setup
 npm run dev
 ```
 
-Copy [`env.example`](env.example) to `.env.local` if you prefer manual setup. You need a [Discogs API token](https://www.discogs.com/settings/developers) and your Discogs username.
+If you prefer manual setup, copy `[env.example](env.example)` to `.env.local` and set:
 
-## Features
+- `DISCOGS_API_TOKEN`
+- `DISCOGS_USERNAME`
+- optional app/admin settings as documented in the template
 
-- Collection browser with table and card views
-- Style, artist, label, year, and date filtering
-- Analytics dashboard and collection value summaries
-- Playlist pages and release-level playlist controls
-- Local SQLite-backed sync and metadata caching
-- Local-only API routes guarded by request checks
+Create a Discogs token at [Discogs developer settings](https://www.discogs.com/settings/developers).
 
 ## Scripts
 
-| Command           | Description              |
-| ----------------- | ------------------------ |
-| `npm run dev`     | Development server       |
-| `npm run build`   | Production build         |
-| `npm run start`   | Run production server    |
-| `npm run lint`    | ESLint                   |
-| `npm run setup`   | Interactive env setup    |
 
-## Releases
+| Command                  | Description                             |
+| ------------------------ | --------------------------------------- |
+| `npm run dev`            | Start development server                |
+| `npm run build`          | Build production artifacts              |
+| `npm run start`          | Run production server                   |
+| `npm run lint`           | Run ESLint                              |
+| `npm run setup`          | Interactive `.env.local` setup          |
+| `npm run security:audit` | Run production dependency audit         |
+| `npm run security:fix`   | Apply production dependency audit fixes |
+| `npm run security:check` | Check outdated packages and audit       |
 
-See [`CHANGELOG.md`](CHANGELOG.md). Tag format: `v1.0.0` (matches `package.json` `version`).
 
-## Repository Notes
+## Tech stack
 
-- `.cursor/` and `docs/` are intentionally local-only and ignored by git.
-- Keep secrets in `.env.local` only; never commit credentials.
+- Next.js (App Router)
+- React + TypeScript
+- Tailwind CSS + UI components
+- SQLite (`better-sqlite3`)
+- Discogs REST API integration
+
+## Release notes
+
+See `[CHANGELOG.md](CHANGELOG.md)` for release history and unreleased changes.
+
+## Repository notes
+
+- Keep all credentials in `.env.local`; never commit secrets.
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE).
+MIT — see `[LICENSE](LICENSE)`.
