@@ -441,33 +441,55 @@ export default function DiscogsCollection() {
 
   // Function to clear a specific column filter
   const clearColumnFilter = (column: string) => {
+    const clearedFilters: CollectionFilters = {
+      artistFilter,
+      titleFilter,
+      labelFilter,
+      yearMinFilter,
+      yearMaxFilter,
+      yearValueFilter,
+      dateAddedMinFilter,
+      dateAddedMaxFilter,
+      styleFilter,
+    };
+
     switch (column) {
       case 'artist':
         setArtistFilter('');
+        clearedFilters.artistFilter = '';
         break;
       case 'title':
         setTitleFilter('');
+        clearedFilters.titleFilter = '';
         break;
       case 'label':
         setLabelFilter('');
+        clearedFilters.labelFilter = '';
         break;
       case 'year':
         setYearMinFilter('');
         setYearMaxFilter('');
         setYearValueFilter('');
+        clearedFilters.yearMinFilter = '';
+        clearedFilters.yearMaxFilter = '';
+        clearedFilters.yearValueFilter = '';
         break;
       case 'styles':
         setStyleFilter([]);
+        clearedFilters.styleFilter = [];
         break;
       case 'date_added':
         setDateAddedMinFilter('');
         setDateAddedMaxFilter('');
+        clearedFilters.dateAddedMinFilter = '';
+        clearedFilters.dateAddedMaxFilter = '';
         break;
     }
 
     setCurrentPage(1);
+    closeFilterDropdown();
     window.setTimeout(() => {
-      fetchCollection(selectedStyles, 1, includeDetails);
+      fetchCollection(selectedStyles, 1, includeDetails, undefined, clearedFilters);
     }, 0);
   };
 
@@ -2094,8 +2116,7 @@ export default function DiscogsCollection() {
                   )}
                 </div>
 
-                {data.releases.length > 0 ? (
-                  <div className="space-y-4">
+                <div className="space-y-4">
                     {/* Filter Results Summary */}
                     {(() => {
                       const hasActiveFilters = artistFilter || titleFilter || labelFilter || yearMinFilter || yearMaxFilter || 
@@ -2627,6 +2648,13 @@ export default function DiscogsCollection() {
                               </TableCell>
                             </TableRow>
                           ))}
+                          {(data?.releases?.length || 0) === 0 && (
+                            <TableRow>
+                              <TableCell colSpan={11} className="py-8 text-center text-muted-foreground">
+                                No releases found matching the current filters
+                              </TableCell>
+                            </TableRow>
+                          )}
                         </TableBody>
                         </Table>
                         </div>
@@ -2744,21 +2772,6 @@ export default function DiscogsCollection() {
                     />
 
                   </div>
-                    ) : (
-                      <div className="text-center py-8 text-muted-foreground">
-                        {(() => {
-                          const hasActiveFilters = artistFilter || titleFilter || labelFilter || yearMinFilter || yearMaxFilter || 
-                                                 dateAddedMinFilter || dateAddedMaxFilter || yearValueFilter || 
-                                                 styleFilter.length > 0 || selectedStyles.length > 0;
-                          
-                          if (hasActiveFilters) {
-                            return 'No releases found matching the current filters';
-                          } else {
-                            return 'No releases found in your collection';
-                          }
-                        })()}
-                      </div>
-                    )}
             </div>
           )}
         </div>
