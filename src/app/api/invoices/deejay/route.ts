@@ -46,6 +46,12 @@ interface AddCollectionRequest {
   importId: string;
 }
 
+interface ImportSessionMetadata {
+  invoiceNumber: string | null;
+  invoiceDate: string | null;
+  shippingPrice: number | null;
+}
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const MATCHER_VERSION = 'deejay-progressive-2026-04-27-2';
 const EXCELLENT_MATCH_SCORE = 90;
@@ -56,7 +62,7 @@ const DEEJAY_DEFAULT_SLEEVE_CONDITION = 'Mint (M)';
 const MAX_INVOICE_UPLOAD_BYTES = 5 * 1024 * 1024;
 const IMPORT_SESSION_TTL_MS = 30 * 60 * 1000;
 let nextDiscogsRequestAt = 0;
-const importSessions = new Map<string, { releaseIds: Set<number>; expiresAt: number }>();
+const importSessions = new Map<string, { releaseIds: Set<number>; expiresAt: number; metadata: ImportSessionMetadata }>();
 
 function cleanupImportSessions() {
   const now = Date.now();
@@ -67,12 +73,13 @@ function cleanupImportSessions() {
   }
 }
 
-function createImportSession(): string {
+function createImportSession(metadata: ImportSessionMetadata): string {
   cleanupImportSessions();
   const importId = crypto.randomUUID();
   importSessions.set(importId, {
     releaseIds: new Set(),
     expiresAt: Date.now() + IMPORT_SESSION_TTL_MS,
+    metadata,
   });
   return importId;
 }
@@ -312,6 +319,16 @@ async function fetchDiscogsRelease(releaseId: number): Promise<any> {
   return response.json();
 }
 
+async function fetchDiscogsMarketplaceStats(releaseId: number): Promise<any | null> {
+  const response = await discogsFetch(`https://api.discogs.com/marketplace/stats/${releaseId}`);
+
+  if (!response.ok) {
+    return null;
+  }
+
+  return response.json();
+}
+
 async function getDiscogsCollectionInstanceId(releaseId: number): Promise<number | null> {
   const response = await discogsFetch(
     `https://api.discogs.com/users/${config.discogsUsername}/collection/releases/${releaseId}`,
@@ -354,7 +371,13 @@ async function setDiscogsDefaultConditions(releaseId: number, instanceId: number
   await setDiscogsCollectionField(releaseId, instanceId, 2, DEEJAY_DEFAULT_SLEEVE_CONDITION);
 }
 
-async function addReleaseToDiscogsCollection(releaseId: number): Promise<number | null> {
+async function addReleaseToDiscogsCollection(releaseId: number): Promise<{ instanceId: number | null; added: boolean }> {
+  // Prevent duplicate Discogs instances: if already present, do not POST add again.
+  const existingInstanceId = await getDiscogsCollectionInstanceId(releaseId);
+  if (typeof existingInstanceId === 'number') {
+    return { instanceId: existingInstanceId, added: false };
+  }
+
   const response = await discogsFetch(
     `https://api.discogs.com/users/${config.discogsUsername}/collection/folders/1/releases/${releaseId}`,
     {
@@ -363,6 +386,12 @@ async function addReleaseToDiscogsCollection(releaseId: number): Promise<number 
   );
 
   if (!response.ok) {
+    if (response.status === 409 || response.status === 422) {
+      const fallbackInstanceId = await getDiscogsCollectionInstanceId(releaseId);
+      if (typeof fallbackInstanceId === 'number') {
+        return { instanceId: fallbackInstanceId, added: false };
+      }
+    }
     throw new Error(`Discogs collection add failed with ${response.status}`);
   }
 
@@ -375,31 +404,63 @@ async function addReleaseToDiscogsCollection(releaseId: number): Promise<number 
 
   await setDiscogsDefaultConditions(releaseId, instanceId);
 
-  return instanceId;
+  return { instanceId, added: true };
 }
 
-async function importReleaseToLocalCollection(releaseId: number): Promise<'added' | 'already-local'> {
+async function importReleaseToLocalCollection(
+  releaseId: number,
+  importMetadata: ImportSessionMetadata,
+): Promise<'added' | 'updated-local'> {
   const db = getDatabase();
+  const releaseData = await fetchDiscogsRelease(releaseId);
   const existingRelease = await db.getReleaseByDiscogsId(releaseId);
+  let localReleaseId: number;
 
   if (existingRelease) {
-    return 'already-local';
+    localReleaseId = existingRelease.id;
+    await db.updateRelease(existingRelease.id, {
+      title: releaseData.title || existingRelease.title,
+      year: releaseData.year || null,
+      cover_image_url: releaseData.images?.[0]?.uri || releaseData.thumb || null,
+      media_condition: DEEJAY_DEFAULT_MEDIA_CONDITION,
+      sleeve_condition: DEEJAY_DEFAULT_SLEEVE_CONDITION,
+      last_sync_at: new Date().toISOString(),
+      sync_status: 'synced',
+      metadata_version: (existingRelease.metadata_version || 0) + 1,
+      import_source: 'deejay.de',
+      import_invoice_number: importMetadata.invoiceNumber,
+      import_invoice_date: importMetadata.invoiceDate,
+      imported_via_invoice_at: new Date().toISOString(),
+      import_shipping_price: importMetadata.shippingPrice,
+    });
+  } else {
+    const imageUrl = releaseData.images?.[0]?.uri || releaseData.thumb || null;
+    localReleaseId = await db.createRelease({
+      discogs_id: releaseId,
+      title: releaseData.title || 'Unknown',
+      year: releaseData.year || null,
+      cover_image_url: imageUrl,
+      date_added: new Date().toISOString(),
+      media_condition: DEEJAY_DEFAULT_MEDIA_CONDITION,
+      sleeve_condition: DEEJAY_DEFAULT_SLEEVE_CONDITION,
+      last_sync_at: new Date().toISOString(),
+      sync_status: 'synced',
+      metadata_version: 1,
+      import_source: 'deejay.de',
+      import_invoice_number: importMetadata.invoiceNumber,
+      import_invoice_date: importMetadata.invoiceDate,
+      imported_via_invoice_at: new Date().toISOString(),
+      import_shipping_price: importMetadata.shippingPrice,
+    });
   }
 
-  const releaseData = await fetchDiscogsRelease(releaseId);
-  const imageUrl = releaseData.images?.[0]?.uri || releaseData.thumb || null;
-  const localReleaseId = await db.createRelease({
-    discogs_id: releaseId,
-    title: releaseData.title || 'Unknown',
-    year: releaseData.year || null,
-    cover_image_url: imageUrl,
-    date_added: new Date().toISOString(),
-    media_condition: DEEJAY_DEFAULT_MEDIA_CONDITION,
-    sleeve_condition: DEEJAY_DEFAULT_SLEEVE_CONDITION,
-    last_sync_at: new Date().toISOString(),
-    sync_status: 'synced',
-    metadata_version: 1,
-  });
+  // Always refresh relation tables from Discogs for invoice-driven syncs.
+  db.getDb().prepare('DELETE FROM release_artists WHERE release_id = ?').run(localReleaseId);
+  db.getDb().prepare('DELETE FROM release_styles WHERE release_id = ?').run(localReleaseId);
+  db.getDb().prepare('DELETE FROM release_genres WHERE release_id = ?').run(localReleaseId);
+  db.getDb().prepare('DELETE FROM release_labels WHERE release_id = ?').run(localReleaseId);
+  db.getDb().prepare('DELETE FROM videos WHERE release_id = ?').run(localReleaseId);
+  db.getDb().prepare('DELETE FROM tracks WHERE release_id = ?').run(localReleaseId);
 
   for (let index = 0; index < (releaseData.artists || []).length; index++) {
     const artist = releaseData.artists[index];
@@ -427,12 +488,63 @@ async function importReleaseToLocalCollection(releaseId: number): Promise<'added
     }
   }
 
-  return 'added';
+  // Persist Discogs videos during invoice import add flow.
+  const videos = Array.isArray(releaseData.videos) ? releaseData.videos : [];
+  if (videos.length > 0) {
+    for (const video of videos) {
+      let videoType: 'discogs' | 'youtube' | 'other' = 'discogs';
+      let youtubeVideoId: string | null = null;
+
+      if (video?.uri && (video.uri.includes('youtube.com') || video.uri.includes('youtu.be'))) {
+        videoType = 'youtube';
+        const youtubeMatch = video.uri.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&\n?#]+)/);
+        if (youtubeMatch) {
+          youtubeVideoId = youtubeMatch[1];
+        }
+      } else if (video?.uri) {
+        videoType = 'other';
+      }
+
+      await db.createVideo({
+        release_id: localReleaseId,
+        uri: video?.uri || '',
+        title: video?.title || 'Untitled video',
+        description: video?.description || null,
+        duration: Number.isFinite(video?.duration) ? video.duration : null,
+        embed: Boolean(video?.embed),
+        video_type: videoType,
+        youtube_video_id: youtubeVideoId,
+        youtube_playlist_id: null,
+      });
+    }
+  }
+
+  // Fetch and persist current marketplace price for the newly added release.
+  const marketplaceStats = await fetchDiscogsMarketplaceStats(releaseId);
+  const lowestPrice = marketplaceStats?.lowest_price?.value;
+  const lowestPriceCurrency = marketplaceStats?.lowest_price?.currency;
+  if (typeof lowestPrice === 'number' && typeof lowestPriceCurrency === 'string' && lowestPriceCurrency.length > 0) {
+    await db.createOrUpdatePrice({
+      release_id: localReleaseId,
+      lowest_price: lowestPrice,
+      currency: lowestPriceCurrency,
+      price_source: 'discogs',
+      last_updated: new Date().toISOString(),
+    });
+  }
+
+  return existingRelease ? 'updated-local' : 'added';
 }
 
-async function addSelectedReleasesToCollection(releaseIds: number[], allowedReleaseIds: Set<number>) {
+async function addSelectedReleasesToCollection(
+  releaseIds: number[],
+  allowedReleaseIds: Set<number>,
+  importMetadata: ImportSessionMetadata,
+) {
   const uniqueReleaseIds = Array.from(new Set(releaseIds.filter((id) => Number.isInteger(id) && id > 0)));
   const results = [];
+  let syncedFromDiscogsCount = 0;
+  let invoiceMetadataUpdatedCount = 0;
 
   for (const releaseId of uniqueReleaseIds) {
     try {
@@ -445,23 +557,9 @@ async function addSelectedReleasesToCollection(releaseIds: number[], allowedRele
         continue;
       }
 
-      const db = getDatabase();
-      const existingRelease = await db.getReleaseByDiscogsId(releaseId);
-
-      if (existingRelease) {
-        results.push({
-          releaseId,
-          status: 'already-local',
-          discogsStatus: 'skipped',
-          conditionStatus: 'skipped',
-          localStatus: 'already-local',
-        });
-        continue;
-      }
-
-      let instanceId: number | null = null;
+      let discogsAddResult: { instanceId: number | null; added: boolean } | null = null;
       try {
-        instanceId = await addReleaseToDiscogsCollection(releaseId);
+        discogsAddResult = await addReleaseToDiscogsCollection(releaseId);
       } catch (discogsError) {
         results.push({
           releaseId,
@@ -475,12 +573,21 @@ async function addSelectedReleasesToCollection(releaseIds: number[], allowedRele
       }
 
       let conditionStatus = 'updated';
-      if (!instanceId) {
+      if (!discogsAddResult?.instanceId) {
         conditionStatus = 'missing-instance';
       }
 
       try {
-        await importReleaseToLocalCollection(releaseId);
+        const localStatus = await importReleaseToLocalCollection(releaseId, importMetadata);
+        syncedFromDiscogsCount += 1;
+        invoiceMetadataUpdatedCount += 1;
+        results.push({
+          releaseId,
+          status: localStatus === 'updated-local' ? 'already-local' : 'added',
+          discogsStatus: discogsAddResult?.added ? 'added' : 'already-in-discogs',
+          conditionStatus,
+          localStatus,
+        });
       } catch (localError) {
         results.push({
           releaseId,
@@ -492,14 +599,6 @@ async function addSelectedReleasesToCollection(releaseIds: number[], allowedRele
         });
         continue;
       }
-
-      results.push({
-        releaseId,
-        status: 'added',
-        discogsStatus: 'added',
-        conditionStatus,
-        localStatus: 'added',
-      });
     } catch (error) {
       results.push({
         releaseId,
@@ -509,7 +608,11 @@ async function addSelectedReleasesToCollection(releaseIds: number[], allowedRele
     }
   }
 
-  return results;
+  return {
+    results,
+    syncedFromDiscogsCount,
+    invoiceMetadataUpdatedCount,
+  };
 }
 
 async function findCandidates(item: DeejayInvoiceItem, debugTrace?: string[]): Promise<CandidateMatch[]> {
@@ -669,11 +772,13 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'Import session expired or invalid' }, { status: 400 });
       }
 
-      const results = await addSelectedReleasesToCollection(body.releaseIds, session.releaseIds);
+      const addOutcome = await addSelectedReleasesToCollection(body.releaseIds, session.releaseIds, session.metadata);
+      const results = addOutcome.results;
 
       return NextResponse.json({
         success: results.every((result) => !['error', 'partial', 'rejected'].includes(result.status)),
         results,
+        message: `Records synced from Discogs: ${addOutcome.syncedFromDiscogsCount}. Invoice metadata updated: ${addOutcome.invoiceMetadataUpdatedCount}.`,
       });
     }
 
@@ -696,7 +801,11 @@ export async function POST(request: NextRequest) {
     const invoice = parseDeejayInvoicePdf(buffer);
     const { extractedText, ...safeInvoice } = invoice;
     void extractedText;
-    const importId = createImportSession();
+    const importId = createImportSession({
+      invoiceNumber: invoice.invoiceNumber,
+      invoiceDate: invoice.invoiceDate,
+      shippingPrice: invoice.shippingPrice,
+    });
 
     return NextResponse.json({
       ...safeInvoice,

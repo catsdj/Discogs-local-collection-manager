@@ -16,6 +16,7 @@ export interface DeejayInvoiceParseResult {
   invoiceNumber: string | null;
   invoiceDate: string | null;
   currency: string | null;
+  shippingPrice: number | null;
   items: DeejayInvoiceItem[];
   extractedText: string;
 }
@@ -79,6 +80,28 @@ function extractPdfText(buffer: Buffer): string {
 
 function parseEuroNumber(value: string): number {
   return Number(value.replace(/\./g, '').replace(',', '.'));
+}
+
+function extractShippingPrice(lines: string[]): number | null {
+  const shippingKeywordPattern = /\b(shipping|versand|porto|freight)\b/i;
+  const euroNumberPattern = /(\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2})/;
+
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    if (!shippingKeywordPattern.test(line)) {
+      continue;
+    }
+
+    const candidates = [line, lines[index + 1], lines[index + 2]].filter(Boolean);
+    for (const candidate of candidates) {
+      const match = candidate.match(euroNumberPattern);
+      if (match?.[1]) {
+        return parseEuroNumber(match[1]);
+      }
+    }
+  }
+
+  return null;
 }
 
 function parseDescription(description: string): Pick<DeejayInvoiceItem, 'catalogNumber' | 'artist' | 'title'> {
@@ -171,6 +194,7 @@ export function parseDeejayInvoicePdf(buffer: Buffer): DeejayInvoiceParseResult 
     invoiceNumber: invoiceNumberIndex >= 0 ? lines[invoiceNumberIndex + 1] || null : null,
     invoiceDate: dateIndex >= 0 ? lines[dateIndex + 1] || null : null,
     currency: currencyIndex >= 0 ? lines[currencyIndex + 1] || null : null,
+    shippingPrice: extractShippingPrice(lines),
     items,
     extractedText,
   };

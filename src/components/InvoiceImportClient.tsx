@@ -73,6 +73,7 @@ export default function InvoiceImportClient() {
   const [isMatching, setIsMatching] = useState(false);
   const [isAddingToCollection, setIsAddingToCollection] = useState(false);
   const [addResults, setAddResults] = useState<AddCollectionResult[] | null>(null);
+  const [addMessage, setAddMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const importRunRef = useRef(0);
 
@@ -81,6 +82,18 @@ export default function InvoiceImportClient() {
     [selectedCandidates],
   );
 
+  const clearCandidateSelection = (itemId: string) => {
+    setSelectedCandidates((current) => {
+      if (!(itemId in current)) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[itemId];
+      return next;
+    });
+  };
+
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const nextFile = event.target.files?.[0] || null;
     setFile(nextFile);
@@ -88,10 +101,11 @@ export default function InvoiceImportClient() {
     setSelectedCandidates({});
     setIsMatching(false);
     setAddResults(null);
+    setAddMessage(null);
     setError(null);
   };
 
-  const matchInvoiceItems = async (items: InvoiceItem[], runId: number) => {
+  const matchInvoiceItems = async (items: InvoiceItem[], runId: number, importId: string) => {
     setIsMatching(true);
 
     for (const item of items) {
@@ -109,7 +123,7 @@ export default function InvoiceImportClient() {
       } : current);
 
       try {
-        const response = await fetch(`/api/invoices/deejay?action=match&importId=${encodeURIComponent(result?.importId || '')}`, {
+        const response = await fetch(`/api/invoices/deejay?action=match&importId=${encodeURIComponent(importId)}`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -172,6 +186,7 @@ export default function InvoiceImportClient() {
     setIsImporting(true);
     setIsMatching(false);
     setAddResults(null);
+    setAddMessage(null);
     setError(null);
     setSelectedCandidates({});
 
@@ -201,7 +216,7 @@ export default function InvoiceImportClient() {
         items: parsedItems,
       });
       setIsImporting(false);
-      void matchInvoiceItems(parsedItems, runId);
+      void matchInvoiceItems(parsedItems, runId, payload.importId as string);
     } catch (importError) {
       setError(importError instanceof Error ? importError.message : 'Invoice import failed');
       setIsMatching(false);
@@ -222,6 +237,7 @@ export default function InvoiceImportClient() {
 
     setIsAddingToCollection(true);
     setAddResults(null);
+    setAddMessage(null);
     setError(null);
 
     try {
@@ -240,6 +256,7 @@ export default function InvoiceImportClient() {
 
       const results = payload.results as AddCollectionResult[];
       setAddResults(results);
+      setAddMessage(typeof payload.message === 'string' ? payload.message : null);
 
       const successfulIds = new Set(
         results
@@ -378,6 +395,11 @@ export default function InvoiceImportClient() {
 	                  {addResults.filter((result) => result.status === 'rejected' || result.status === 'error').length} failed.
                 </div>
               )}
+              {addMessage && (
+                <div className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+                  {addMessage}
+                </div>
+              )}
             </CardContent>
           </Card>
 
@@ -433,6 +455,30 @@ export default function InvoiceImportClient() {
                     </div>
                   ) : (
                     <div className="grid gap-3">
+                      <label
+                        htmlFor={`${item.id}-skip`}
+                        className={`grid cursor-pointer gap-3 rounded-lg border p-3 transition-colors md:grid-cols-[auto_1fr] ${
+                          !selectedCandidates[item.id]
+                            ? 'border-amber-300 bg-amber-50'
+                            : 'border-border bg-background hover:bg-muted/60'
+                        }`}
+                      >
+                        <input
+                          id={`${item.id}-skip`}
+                          type="radio"
+                          name={`item-${item.id}`}
+                          checked={!selectedCandidates[item.id]}
+                          onChange={() => clearCandidateSelection(item.id)}
+                          className="mt-1"
+                        />
+                        <div className="min-w-0">
+                          <div className="font-medium">Do not add this row</div>
+                          <div className="text-sm text-muted-foreground">
+                            Exclude this invoice line from the add-to-collection step.
+                          </div>
+                        </div>
+                      </label>
+
                       {item.candidates.map((candidate) => {
                         const inputId = `${item.id}-${candidate.id}`;
                         const selected = selectedCandidates[item.id] === candidate.id;

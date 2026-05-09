@@ -17,6 +17,11 @@ export interface ReleaseRecord {
   last_sync_at: string | null;
   sync_status: 'pending' | 'synced' | 'failed';
   metadata_version: number;
+  import_source: string | null;
+  import_invoice_number: string | null;
+  import_invoice_date: string | null;
+  imported_via_invoice_at: string | null;
+  import_shipping_price: number | null;
 }
 
 export interface ArtistRecord {
@@ -186,6 +191,11 @@ export class DiscogsDatabase {
         last_sync_at TEXT,
         sync_status TEXT NOT NULL DEFAULT 'pending' CHECK (sync_status IN ('pending', 'synced', 'failed')),
         metadata_version INTEGER NOT NULL DEFAULT 1,
+        import_source TEXT,
+        import_invoice_number TEXT,
+        import_invoice_date TEXT,
+        imported_via_invoice_at TEXT,
+        import_shipping_price REAL,
         no_videos_available INTEGER NOT NULL DEFAULT 0,
         no_condition_available INTEGER NOT NULL DEFAULT 0,
         video_check_attempt_count INTEGER NOT NULL DEFAULT 0,
@@ -363,9 +373,31 @@ export class DiscogsDatabase {
 
     // Create indexes for performance
     this.createIndexes();
+
+    // Ensure newer columns exist for existing databases.
+    this.ensureReleaseImportColumns();
     
     // Create triggers for updated_at timestamps
     this.createTriggers();
+  }
+
+  private ensureReleaseImportColumns() {
+    const tableInfo = this.db.prepare(`PRAGMA table_info(releases)`).all() as Array<{ name: string }>;
+    const existingColumns = new Set(tableInfo.map((column) => column.name));
+    const requiredColumns: Array<{ name: string; sqlType: string }> = [
+      { name: 'import_source', sqlType: 'TEXT' },
+      { name: 'import_invoice_number', sqlType: 'TEXT' },
+      { name: 'import_invoice_date', sqlType: 'TEXT' },
+      { name: 'imported_via_invoice_at', sqlType: 'TEXT' },
+      { name: 'import_shipping_price', sqlType: 'REAL' },
+    ];
+
+    for (const column of requiredColumns) {
+      if (existingColumns.has(column.name)) {
+        continue;
+      }
+      this.db.exec(`ALTER TABLE releases ADD COLUMN ${column.name} ${column.sqlType}`);
+    }
   }
 
   private createIndexes() {
@@ -502,7 +534,28 @@ export class DiscogsDatabase {
   }
 
   // Release CRUD operations
-  async createRelease(releaseData: Omit<ReleaseRecord, 'id' | 'created_at' | 'updated_at'>): Promise<number> {
+  async createRelease(
+    releaseData: Omit<
+      ReleaseRecord,
+      'id' |
+      'created_at' |
+      'updated_at' |
+      'import_source' |
+      'import_invoice_number' |
+      'import_invoice_date' |
+      'imported_via_invoice_at' |
+      'import_shipping_price'
+    > & Partial<
+      Pick<
+        ReleaseRecord,
+        'import_source' |
+        'import_invoice_number' |
+        'import_invoice_date' |
+        'imported_via_invoice_at' |
+        'import_shipping_price'
+      >
+    >,
+  ): Promise<number> {
     const stmt = this.db.prepare(`
       INSERT INTO releases (
         discogs_id,
@@ -514,9 +567,14 @@ export class DiscogsDatabase {
         sleeve_condition,
         last_sync_at,
         sync_status,
-        metadata_version
+        metadata_version,
+        import_source,
+        import_invoice_number,
+        import_invoice_date,
+        imported_via_invoice_at,
+        import_shipping_price
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     
     const result = stmt.run(
@@ -529,7 +587,12 @@ export class DiscogsDatabase {
       releaseData.sleeve_condition,
       releaseData.last_sync_at,
       releaseData.sync_status,
-      releaseData.metadata_version
+      releaseData.metadata_version,
+      releaseData.import_source ?? null,
+      releaseData.import_invoice_number ?? null,
+      releaseData.import_invoice_date ?? null,
+      releaseData.imported_via_invoice_at ?? null,
+      releaseData.import_shipping_price ?? null,
     );
     
     return result.lastInsertRowid as number;
