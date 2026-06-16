@@ -1,10 +1,11 @@
 'use client';
 
-import { ChangeEvent, useMemo, useRef, useState } from 'react';
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { AlertCircle, CheckCircle2, ExternalLink, FileText, PlusCircle, Search, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Select } from '@/components/ui/select';
 
 interface InvoiceCandidate {
   id: number;
@@ -48,8 +49,22 @@ interface InvoiceImportResult {
 
 interface AddCollectionResult {
   releaseId: number;
+  folderId?: number;
+  folderName?: string;
   status: 'added' | 'already-local' | 'partial' | 'rejected' | 'error';
+  discogsStatus?: string;
   error?: string;
+}
+
+interface CollectionFolder {
+  id: number;
+  name: string;
+  count: number;
+}
+
+interface AddSelection {
+  releaseId: number;
+  folderId: number;
 }
 
 const confidenceClassNames: Record<InvoiceCandidate['confidence'], string> = {
@@ -69,6 +84,10 @@ export default function InvoiceImportClient() {
   const [file, setFile] = useState<File | null>(null);
   const [result, setResult] = useState<InvoiceImportResult | null>(null);
   const [selectedCandidates, setSelectedCandidates] = useState<Record<string, number>>({});
+  const [selectedFolderByItem, setSelectedFolderByItem] = useState<Record<string, number>>({});
+  const [collectionFolders, setCollectionFolders] = useState<CollectionFolder[]>([]);
+  const [isLoadingFolders, setIsLoadingFolders] = useState(false);
+  const [folderError, setFolderError] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
   const [isMatching, setIsMatching] = useState(false);
   const [isAddingToCollection, setIsAddingToCollection] = useState(false);
@@ -82,8 +101,96 @@ export default function InvoiceImportClient() {
     [selectedCandidates],
   );
 
+  const defaultFolderId = useMemo(() => {
+    const uncategorized = collectionFolders.find((folder) => folder.id === 1);
+    return uncategorized?.id ?? collectionFolders[0]?.id ?? null;
+  }, [collectionFolders]);
+
+  const selectedRowsWithFolders = useMemo(() => {
+    if (!result) {
+      return [];
+    }
+
+    return result.items
+      .map((item): AddSelection | null => {
+        const releaseId = selectedCandidates[item.id];
+        const folderId = selectedFolderByItem[item.id] ?? defaultFolderId;
+
+        if (!releaseId || !folderId) {
+          return null;
+        }
+
+        return { releaseId, folderId };
+      })
+      .filter((selection): selection is AddSelection => selection !== null);
+  }, [defaultFolderId, result, selectedCandidates, selectedFolderByItem]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadCollectionFolders() {
+      setIsLoadingFolders(true);
+      setFolderError(null);
+
+      try {
+        const response = await fetch('/api/invoices/deejay?action=folders');
+        const payload = await response.json();
+
+        if (!response.ok) {
+          throw new Error(payload.error || 'Failed to load Discogs folders');
+        }
+
+        if (!cancelled) {
+          setCollectionFolders(payload.folders || []);
+        }
+      } catch (loadError) {
+        if (!cancelled) {
+          setFolderError(loadError instanceof Error ? loadError.message : 'Failed to load Discogs folders');
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingFolders(false);
+        }
+      }
+    }
+
+    void loadCollectionFolders();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const getSelectedFolderId = (itemId: string) => selectedFolderByItem[itemId] ?? defaultFolderId;
+
+  const setCandidateSelection = (itemId: string, releaseId: number) => {
+    setSelectedCandidates((current) => ({
+      ...current,
+      [itemId]: releaseId,
+    }));
+    setSelectedFolderByItem((current) => {
+      if (current[itemId] || !defaultFolderId) {
+        return current;
+      }
+
+      return {
+        ...current,
+        [itemId]: defaultFolderId,
+      };
+    });
+  };
+
   const clearCandidateSelection = (itemId: string) => {
     setSelectedCandidates((current) => {
+      if (!(itemId in current)) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[itemId];
+      return next;
+    });
+    setSelectedFolderByItem((current) => {
       if (!(itemId in current)) {
         return current;
       }
@@ -99,6 +206,7 @@ export default function InvoiceImportClient() {
     setFile(nextFile);
     setResult(null);
     setSelectedCandidates({});
+    setSelectedFolderByItem({});
     setIsMatching(false);
     setAddResults(null);
     setAddMessage(null);
@@ -152,10 +260,7 @@ export default function InvoiceImportClient() {
 
         const bestCandidate = candidates[0];
         if (bestCandidate?.confidence === 'strong') {
-          setSelectedCandidates((current) => ({
-            ...current,
-            [item.id]: bestCandidate.id,
-          }));
+          setCandidateSelection(item.id, bestCandidate.id);
         }
       } catch (matchError) {
         setResult((current) => current ? {
@@ -189,6 +294,7 @@ export default function InvoiceImportClient() {
     setAddMessage(null);
     setError(null);
     setSelectedCandidates({});
+    setSelectedFolderByItem({});
 
     const formData = new FormData();
     formData.append('file', file);
@@ -229,9 +335,7 @@ export default function InvoiceImportClient() {
   };
 
   const handleAddSelectedToCollection = async () => {
-    const releaseIds = Array.from(new Set(Object.values(selectedCandidates).filter(Boolean)));
-
-    if (releaseIds.length === 0) {
+    if (selectedRowsWithFolders.length === 0) {
       return;
     }
 
@@ -246,7 +350,7 @@ export default function InvoiceImportClient() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ releaseIds, importId: result?.importId }),
+        body: JSON.stringify({ selections: selectedRowsWithFolders, importId: result?.importId }),
       });
       const payload = await response.json();
 
@@ -368,11 +472,18 @@ export default function InvoiceImportClient() {
               </div>
               <div className="mt-4 flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
                 <div className="text-sm text-muted-foreground">
-                  Add selected Discogs releases to both Discogs and the local app database.
+                  Add selected Discogs releases to the chosen Discogs folders and the local app database.
                 </div>
                 <Button
                   onClick={handleAddSelectedToCollection}
-                  disabled={selectedCount === 0 || isAddingToCollection || isImporting || isMatching}
+                  disabled={
+                    selectedCount === 0 ||
+                    selectedRowsWithFolders.length !== selectedCount ||
+                    isLoadingFolders ||
+                    isAddingToCollection ||
+                    isImporting ||
+                    isMatching
+                  }
                 >
                   {isAddingToCollection ? (
                     <>
@@ -387,12 +498,39 @@ export default function InvoiceImportClient() {
                   )}
                 </Button>
               </div>
+              <div className="mt-3 rounded-md border bg-muted p-3 text-sm">
+                {isLoadingFolders ? (
+                  <span className="text-muted-foreground">Loading Discogs folders...</span>
+                ) : folderError ? (
+                  <span className="text-red-700">{folderError}</span>
+                ) : collectionFolders.length > 0 ? (
+                  <span className="text-muted-foreground">
+                    {collectionFolders.length} assignable Discogs folders loaded. The aggregate All folder is intentionally excluded.
+                  </span>
+                ) : (
+                  <span className="text-red-700">No assignable Discogs folders are available.</span>
+                )}
+              </div>
               {addResults && (
-                <div className="mt-3 rounded-md border bg-muted p-3 text-sm">
-	                  {addResults.filter((result) => result.status === 'added').length} added,{' '}
-	                  {addResults.filter((result) => result.status === 'already-local').length} already local,{' '}
-	                  {addResults.filter((result) => result.status === 'partial').length} partial,{' '}
-	                  {addResults.filter((result) => result.status === 'rejected' || result.status === 'error').length} failed.
+                <div className="mt-3 space-y-2 rounded-md border bg-muted p-3 text-sm">
+                  <div>
+                    {addResults.filter((result) => result.status === 'added').length} added,{' '}
+                    {addResults.filter((result) => result.status === 'already-local').length} already local,{' '}
+                    {addResults.filter((result) => result.status === 'partial').length} partial,{' '}
+                    {addResults.filter((result) => result.status === 'rejected' || result.status === 'error').length} failed.
+                  </div>
+                  {addResults.some((result) => result.error) && (
+                    <div className="space-y-1 text-red-700">
+                      {addResults
+                        .filter((result) => result.error)
+                        .map((result) => (
+                          <div key={`${result.releaseId}-${result.folderId || 'none'}`}>
+                            {result.releaseId}
+                            {result.folderName ? ` -> ${result.folderName}` : ''}: {result.error}
+                          </div>
+                        ))}
+                    </div>
+                  )}
                 </div>
               )}
               {addMessage && (
@@ -500,10 +638,7 @@ export default function InvoiceImportClient() {
                               type="radio"
                               name={`item-${item.id}`}
                               checked={selected}
-                              onChange={() => setSelectedCandidates((current) => ({
-                                ...current,
-                                [item.id]: candidate.id,
-                              }))}
+                              onChange={() => setCandidateSelection(item.id, candidate.id)}
                               className="mt-2"
                             />
                             <div className="h-[72px] w-[72px] overflow-hidden rounded-md bg-muted">
@@ -562,9 +697,37 @@ export default function InvoiceImportClient() {
                   )}
 
                   {selectedCandidates[item.id] && (
-                    <div className="flex items-center gap-2 text-sm text-emerald-700">
-                      <CheckCircle2 className="h-4 w-4" />
-                      Row {itemIndex + 1} has a selected release for the next add-to-collection step.
+                    <div className="grid gap-3 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800 sm:grid-cols-[1fr_240px] sm:items-center">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 className="h-4 w-4" />
+                        Row {itemIndex + 1} has a selected release for the next add-to-collection step.
+                      </div>
+                      <Select
+                        value={String(getSelectedFolderId(item.id) || '')}
+                        onChange={(event) => {
+                          const folderId = Number(event.target.value);
+                          if (!Number.isInteger(folderId)) {
+                            return;
+                          }
+
+                          setSelectedFolderByItem((current) => ({
+                            ...current,
+                            [item.id]: folderId,
+                          }));
+                        }}
+                        disabled={isLoadingFolders || collectionFolders.length === 0}
+                        aria-label={`Discogs folder for invoice row ${itemIndex + 1}`}
+                        className="bg-white"
+                      >
+                        <option value="" disabled>
+                          {isLoadingFolders ? 'Loading folders...' : 'Choose folder'}
+                        </option>
+                        {collectionFolders.map((folder) => (
+                          <option key={folder.id} value={folder.id}>
+                            {folder.name} ({folder.count})
+                          </option>
+                        ))}
+                      </Select>
                     </div>
                   )}
                 </CardContent>

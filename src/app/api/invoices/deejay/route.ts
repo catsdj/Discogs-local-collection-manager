@@ -41,8 +41,25 @@ interface CandidateMatch {
   inCollection: boolean;
 }
 
+interface DiscogsCollectionFolder {
+  id: number;
+  name: string;
+  count: number;
+}
+
+interface DiscogsCollectionInstance {
+  instanceId: number;
+  folderId: number;
+}
+
+interface AddCollectionSelection {
+  releaseId: number;
+  folderId: number;
+}
+
 interface AddCollectionRequest {
-  releaseIds: number[];
+  releaseIds?: number[];
+  selections?: AddCollectionSelection[];
   importId: string;
 }
 
@@ -309,6 +326,28 @@ async function discogsFetch(url: string, init: RequestInit = {}): Promise<Respon
   });
 }
 
+async function fetchDiscogsCollectionFolders(): Promise<DiscogsCollectionFolder[]> {
+  const response = await discogsFetch(`https://api.discogs.com/users/${config.discogsUsername}/collection/folders`);
+
+  if (!response.ok) {
+    throw new Error(`Discogs collection folders fetch failed with ${response.status}`);
+  }
+
+  const data = await response.json() as { folders?: DiscogsCollectionFolder[] };
+  return (data.folders || [])
+    .filter((folder) => (
+      Number.isInteger(folder.id) &&
+      folder.id > 0 &&
+      typeof folder.name === 'string' &&
+      folder.name.trim().length > 0
+    ))
+    .map((folder) => ({
+      id: folder.id,
+      name: folder.name,
+      count: Number.isFinite(folder.count) ? folder.count : 0,
+    }));
+}
+
 async function fetchDiscogsRelease(releaseId: number): Promise<any> {
   const response = await discogsFetch(`https://api.discogs.com/releases/${releaseId}`);
 
@@ -329,29 +368,41 @@ async function fetchDiscogsMarketplaceStats(releaseId: number): Promise<any | nu
   return response.json();
 }
 
-async function getDiscogsCollectionInstanceId(releaseId: number): Promise<number | null> {
+async function getDiscogsCollectionInstances(releaseId: number): Promise<DiscogsCollectionInstance[]> {
   const response = await discogsFetch(
     `https://api.discogs.com/users/${config.discogsUsername}/collection/releases/${releaseId}`,
   );
 
   if (!response.ok) {
-    return null;
+    return [];
   }
 
   const data = await response.json();
-  const instanceId = data?.releases?.[0]?.instance_id || data?.releases?.[0]?.id || data?.instance_id;
+  const releases = Array.isArray(data?.releases) ? data.releases : [];
 
-  return typeof instanceId === 'number' ? instanceId : null;
+  return releases
+    .map((release: any): DiscogsCollectionInstance | null => {
+      const instanceId = Number(release?.instance_id || release?.id);
+      const folderId = Number(release?.folder_id);
+
+      if (!Number.isInteger(instanceId) || !Number.isInteger(folderId)) {
+        return null;
+      }
+
+      return { instanceId, folderId };
+    })
+    .filter((instance: DiscogsCollectionInstance | null): instance is DiscogsCollectionInstance => instance !== null);
 }
 
 async function setDiscogsCollectionField(
   releaseId: number,
+  folderId: number,
   instanceId: number,
   fieldId: number,
   value: string,
 ): Promise<void> {
   const response = await discogsFetch(
-    `https://api.discogs.com/users/${config.discogsUsername}/collection/folders/1/releases/${releaseId}/instances/${instanceId}/fields/${fieldId}`,
+    `https://api.discogs.com/users/${config.discogsUsername}/collection/folders/${folderId}/releases/${releaseId}/instances/${instanceId}/fields/${fieldId}`,
     {
       method: 'POST',
       headers: {
@@ -366,20 +417,44 @@ async function setDiscogsCollectionField(
   }
 }
 
-async function setDiscogsDefaultConditions(releaseId: number, instanceId: number): Promise<void> {
-  await setDiscogsCollectionField(releaseId, instanceId, 1, DEEJAY_DEFAULT_MEDIA_CONDITION);
-  await setDiscogsCollectionField(releaseId, instanceId, 2, DEEJAY_DEFAULT_SLEEVE_CONDITION);
+async function setDiscogsDefaultConditions(releaseId: number, folderId: number, instanceId: number): Promise<void> {
+  await setDiscogsCollectionField(releaseId, folderId, instanceId, 1, DEEJAY_DEFAULT_MEDIA_CONDITION);
+  await setDiscogsCollectionField(releaseId, folderId, instanceId, 2, DEEJAY_DEFAULT_SLEEVE_CONDITION);
 }
 
-async function addReleaseToDiscogsCollection(releaseId: number): Promise<{ instanceId: number | null; added: boolean }> {
-  // Prevent duplicate Discogs instances: if already present, do not POST add again.
-  const existingInstanceId = await getDiscogsCollectionInstanceId(releaseId);
-  if (typeof existingInstanceId === 'number') {
-    return { instanceId: existingInstanceId, added: false };
+async function addReleaseToDiscogsCollection(
+  releaseId: number,
+  folderId: number,
+): Promise<{
+  instanceId: number | null;
+  added: boolean;
+  alreadyInDifferentFolder: boolean;
+  existingFolderId: number | null;
+}> {
+  // Prevent duplicate Discogs instances: if already present in another folder, do not POST add again.
+  const existingInstances = await getDiscogsCollectionInstances(releaseId);
+  const targetInstance = existingInstances.find((instance) => instance.folderId === folderId);
+
+  if (targetInstance) {
+    return {
+      instanceId: targetInstance.instanceId,
+      added: false,
+      alreadyInDifferentFolder: false,
+      existingFolderId: folderId,
+    };
+  }
+
+  if (existingInstances.length > 0) {
+    return {
+      instanceId: existingInstances[0].instanceId,
+      added: false,
+      alreadyInDifferentFolder: true,
+      existingFolderId: existingInstances[0].folderId,
+    };
   }
 
   const response = await discogsFetch(
-    `https://api.discogs.com/users/${config.discogsUsername}/collection/folders/1/releases/${releaseId}`,
+    `https://api.discogs.com/users/${config.discogsUsername}/collection/folders/${folderId}/releases/${releaseId}`,
     {
       method: 'POST',
     },
@@ -387,24 +462,38 @@ async function addReleaseToDiscogsCollection(releaseId: number): Promise<{ insta
 
   if (!response.ok) {
     if (response.status === 409 || response.status === 422) {
-      const fallbackInstanceId = await getDiscogsCollectionInstanceId(releaseId);
-      if (typeof fallbackInstanceId === 'number') {
-        return { instanceId: fallbackInstanceId, added: false };
+      const fallbackInstances = await getDiscogsCollectionInstances(releaseId);
+      const fallbackTargetInstance = fallbackInstances.find((instance) => instance.folderId === folderId);
+      if (fallbackTargetInstance) {
+        return {
+          instanceId: fallbackTargetInstance.instanceId,
+          added: false,
+          alreadyInDifferentFolder: false,
+          existingFolderId: folderId,
+        };
       }
     }
     throw new Error(`Discogs collection add failed with ${response.status}`);
   }
 
   const data = await response.json().catch(() => null);
-  const instanceId = data?.instance_id || data?.id || await getDiscogsCollectionInstanceId(releaseId);
+  const addedInstanceId = Number(data?.instance_id || data?.id);
+  const fallbackInstances = Number.isInteger(addedInstanceId) ? [] : await getDiscogsCollectionInstances(releaseId);
+  const fallbackTargetInstance = fallbackInstances.find((instance) => instance.folderId === folderId);
+  const instanceId = Number.isInteger(addedInstanceId) ? addedInstanceId : fallbackTargetInstance?.instanceId || null;
 
   if (typeof instanceId !== 'number') {
     throw new Error('Discogs collection add succeeded, but no instance ID was returned');
   }
 
-  await setDiscogsDefaultConditions(releaseId, instanceId);
+  await setDiscogsDefaultConditions(releaseId, folderId, instanceId);
 
-  return { instanceId, added: true };
+  return {
+    instanceId,
+    added: true,
+    alreadyInDifferentFolder: false,
+    existingFolderId: folderId,
+  };
 }
 
 async function importReleaseToLocalCollection(
@@ -537,37 +626,95 @@ async function importReleaseToLocalCollection(
 }
 
 async function addSelectedReleasesToCollection(
-  releaseIds: number[],
+  selections: AddCollectionSelection[],
   allowedReleaseIds: Set<number>,
   importMetadata: ImportSessionMetadata,
+  folderById: Map<number, DiscogsCollectionFolder>,
 ) {
-  const uniqueReleaseIds = Array.from(new Set(releaseIds.filter((id) => Number.isInteger(id) && id > 0)));
+  const uniqueSelections = Array.from(
+    new Map(
+      selections
+        .filter((selection) => (
+          Number.isInteger(selection.releaseId) &&
+          selection.releaseId > 0 &&
+          Number.isInteger(selection.folderId) &&
+          folderById.has(selection.folderId)
+        ))
+        .map((selection) => [selection.releaseId, selection]),
+    ).values(),
+  );
   const results = [];
   let syncedFromDiscogsCount = 0;
   let invoiceMetadataUpdatedCount = 0;
 
-  for (const releaseId of uniqueReleaseIds) {
+  for (const selection of uniqueSelections) {
+    const { releaseId, folderId } = selection;
+    const folder = folderById.get(folderId);
+
+    if (!folder) {
+      results.push({
+        releaseId,
+        folderId,
+        status: 'rejected',
+        error: 'Selected Discogs folder does not exist',
+      });
+      continue;
+    }
+
     try {
       if (!allowedReleaseIds.has(releaseId)) {
         results.push({
           releaseId,
+          folderId,
+          folderName: folder.name,
           status: 'rejected',
           error: 'Release was not produced by this invoice import session',
         });
         continue;
       }
 
-      let discogsAddResult: { instanceId: number | null; added: boolean } | null = null;
+      let discogsAddResult: Awaited<ReturnType<typeof addReleaseToDiscogsCollection>> | null = null;
       try {
-        discogsAddResult = await addReleaseToDiscogsCollection(releaseId);
+        discogsAddResult = await addReleaseToDiscogsCollection(releaseId, folderId);
       } catch (discogsError) {
         results.push({
           releaseId,
+          folderId,
+          folderName: folder.name,
           status: 'error',
           discogsStatus: 'failed',
           conditionStatus: 'skipped',
           localStatus: 'skipped',
           error: discogsError instanceof Error ? discogsError.message : 'Discogs add failed',
+        });
+        continue;
+      }
+
+      if (!discogsAddResult) {
+        results.push({
+          releaseId,
+          folderId,
+          folderName: folder.name,
+          status: 'error',
+          discogsStatus: 'failed',
+          conditionStatus: 'skipped',
+          localStatus: 'skipped',
+          error: 'Discogs add did not return a result',
+        });
+        continue;
+      }
+
+      if (discogsAddResult.alreadyInDifferentFolder) {
+        const existingFolder = discogsAddResult.existingFolderId ? folderById.get(discogsAddResult.existingFolderId) : null;
+        results.push({
+          releaseId,
+          folderId,
+          folderName: folder.name,
+          status: 'rejected',
+          discogsStatus: 'already-in-different-folder',
+          conditionStatus: 'skipped',
+          localStatus: 'skipped',
+          error: `Release already exists in Discogs folder "${existingFolder?.name || discogsAddResult.existingFolderId || 'unknown'}"; this flow avoids creating a duplicate copy.`,
         });
         continue;
       }
@@ -583,6 +730,8 @@ async function addSelectedReleasesToCollection(
         invoiceMetadataUpdatedCount += 1;
         results.push({
           releaseId,
+          folderId,
+          folderName: folder.name,
           status: localStatus === 'updated-local' ? 'already-local' : 'added',
           discogsStatus: discogsAddResult?.added ? 'added' : 'already-in-discogs',
           conditionStatus,
@@ -591,6 +740,8 @@ async function addSelectedReleasesToCollection(
       } catch (localError) {
         results.push({
           releaseId,
+          folderId,
+          folderName: folder.name,
           status: 'partial',
           discogsStatus: 'added',
           conditionStatus,
@@ -602,6 +753,8 @@ async function addSelectedReleasesToCollection(
     } catch (error) {
       results.push({
         releaseId,
+        folderId,
+        folderName: folder.name,
         status: 'error',
         error: error instanceof Error ? error.message : 'Failed to add release',
       });
@@ -613,6 +766,55 @@ async function addSelectedReleasesToCollection(
     syncedFromDiscogsCount,
     invoiceMetadataUpdatedCount,
   };
+}
+
+function parseAddSelections(
+  body: AddCollectionRequest,
+  folderById: Map<number, DiscogsCollectionFolder>,
+  defaultFolderId: number | null,
+): { selections: AddCollectionSelection[]; error?: string } {
+  const rawSelections = Array.isArray(body.selections)
+    ? body.selections
+    : Array.isArray(body.releaseIds)
+      ? body.releaseIds.map((releaseId) => ({ releaseId, folderId: defaultFolderId }))
+      : null;
+
+  if (!rawSelections) {
+    return { selections: [], error: 'selections must be an array' };
+  }
+
+  if (!defaultFolderId && !Array.isArray(body.selections)) {
+    return { selections: [], error: 'No default Discogs folder is available' };
+  }
+
+  const selections: AddCollectionSelection[] = [];
+  const seenReleaseIds = new Set<number>();
+
+  for (const rawSelection of rawSelections) {
+    const releaseId = Number(rawSelection?.releaseId);
+    const folderId = Number(rawSelection?.folderId);
+
+    if (!Number.isInteger(releaseId) || releaseId <= 0) {
+      continue;
+    }
+
+    if (!Number.isInteger(folderId) || !folderById.has(folderId)) {
+      return { selections: [], error: `Invalid Discogs folder ID for release ${releaseId}` };
+    }
+
+    if (seenReleaseIds.has(releaseId)) {
+      continue;
+    }
+
+    seenReleaseIds.add(releaseId);
+    selections.push({ releaseId, folderId });
+  }
+
+  if (selections.length === 0) {
+    return { selections: [], error: 'No valid releases were selected' };
+  }
+
+  return { selections };
 }
 
 async function findCandidates(item: DeejayInvoiceItem, debugTrace?: string[]): Promise<CandidateMatch[]> {
@@ -724,6 +926,30 @@ async function findCandidates(item: DeejayInvoiceItem, debugTrace?: string[]): P
     });
 }
 
+export async function GET(request: NextRequest) {
+  const localOnlyResponse = rejectIfNotLocal(request);
+
+  if (localOnlyResponse) {
+    return localOnlyResponse;
+  }
+
+  try {
+    const { searchParams } = new URL(request.url);
+    const action = searchParams.get('action');
+
+    if (action !== 'folders') {
+      return NextResponse.json({ error: 'Unsupported invoice import action' }, { status: 400 });
+    }
+
+    const folders = await fetchDiscogsCollectionFolders();
+
+    return NextResponse.json({ folders });
+  } catch (error) {
+    console.error('Failed to fetch Discogs collection folders:', error);
+    return NextResponse.json({ error: 'Failed to fetch Discogs collection folders' }, { status: 500 });
+  }
+}
+
 export async function POST(request: NextRequest) {
   const localOnlyResponse = rejectIfNotLocal(request);
 
@@ -763,16 +989,26 @@ export async function POST(request: NextRequest) {
     if (action === 'add') {
       const body = await request.json() as AddCollectionRequest;
 
-      if (!Array.isArray(body.releaseIds)) {
-        return NextResponse.json({ error: 'releaseIds must be an array' }, { status: 400 });
-      }
-
       const session = getImportSession(body.importId);
       if (!session) {
         return NextResponse.json({ error: 'Import session expired or invalid' }, { status: 400 });
       }
 
-      const addOutcome = await addSelectedReleasesToCollection(body.releaseIds, session.releaseIds, session.metadata);
+      const folders = await fetchDiscogsCollectionFolders();
+      const folderById = new Map(folders.map((folder) => [folder.id, folder]));
+      const defaultFolderId = folderById.has(1) ? 1 : folders[0]?.id ?? null;
+      const parsedSelections = parseAddSelections(body, folderById, defaultFolderId);
+
+      if (parsedSelections.error) {
+        return NextResponse.json({ error: parsedSelections.error }, { status: 400 });
+      }
+
+      const addOutcome = await addSelectedReleasesToCollection(
+        parsedSelections.selections,
+        session.releaseIds,
+        session.metadata,
+        folderById,
+      );
       const results = addOutcome.results;
 
       return NextResponse.json({
