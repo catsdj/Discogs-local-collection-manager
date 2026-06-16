@@ -36,7 +36,7 @@ interface CacheData {
 }
 
 // Load cache from localStorage with security checks
-export function loadCache(): CacheData {
+function loadCache(): CacheData {
   try {
     const cached = localStorage.getItem(CACHE_KEY);
     if (!cached) return {};
@@ -114,80 +114,6 @@ export function loadCache(): CacheData {
     clearCache();
     return {};
   }
-}
-
-// Save release details to cache with security validation
-export function saveToCache(releaseId: number, videos: any[], tracklist: any[], priceInfo?: any, mediaCondition?: string | null, sleeveCondition?: string | null): void {
-  try {
-    // Validate inputs
-    if (!Number.isInteger(releaseId) || releaseId <= 0) {
-      console.error('Invalid release ID for caching:', releaseId);
-      return;
-    }
-    
-    if (!Array.isArray(videos) || !Array.isArray(tracklist)) {
-      console.error('Invalid data structure for caching');
-      return;
-    }
-    
-    // Limit data size
-    if (videos.length > MAX_ENTRIES_PER_RELEASE || tracklist.length > MAX_ENTRIES_PER_RELEASE) {
-      console.warn(`Data size exceeds limit for release ${releaseId}. Truncating.`);
-      videos = videos.slice(0, MAX_ENTRIES_PER_RELEASE);
-      tracklist = tracklist.slice(0, MAX_ENTRIES_PER_RELEASE);
-    }
-    
-    const cache = loadCache();
-    
-    // Check if we're approaching the total entry limit
-    if (Object.keys(cache).length >= MAX_TOTAL_ENTRIES && !cache[releaseId]) {
-      // Remove oldest entries to make room
-      const entries = Object.entries(cache).sort((a, b) => 
-        new Date(a[1].cachedAt).getTime() - new Date(b[1].cachedAt).getTime()
-      );
-      
-      // Remove oldest 10% of entries
-      const toRemove = Math.floor(MAX_TOTAL_ENTRIES * 0.1);
-      for (let i = 0; i < toRemove; i++) {
-        delete cache[parseInt(entries[i][0])];
-      }
-    }
-    
-  cache[releaseId] = {
-      releaseId,
-      videos,
-      tracklist,
-    priceInfo,
-    media_condition: mediaCondition || null,
-    sleeve_condition: sleeveCondition || null,
-      cachedAt: new Date().toISOString(),
-      version: CACHE_VERSION
-    };
-    
-    const cacheString = JSON.stringify(cache);
-    const cacheSizeMB = new Blob([cacheString]).size / (1024 * 1024);
-    
-    if (cacheSizeMB > MAX_CACHE_SIZE_MB) {
-      console.warn(`Cache would exceed size limit (${cacheSizeMB.toFixed(2)}MB). Not caching.`);
-      return;
-    }
-    
-    localStorage.setItem(CACHE_KEY, cacheString);
-    // console.log(`Cached details for release ${releaseId}`);
-  } catch (error) {
-    console.error('Error saving to cache:', error);
-  }
-}
-
-// Get cached release details
-export function getCachedDetails(releaseId: number): CachedReleaseDetails | null {
-  const cache = loadCache();
-  return cache[releaseId] || null;
-}
-
-// Check if release details are cached
-export function isCached(releaseId: number): boolean {
-  return getCachedDetails(releaseId) !== null;
 }
 
 // Clear all cache

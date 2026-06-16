@@ -1,5 +1,9 @@
 import DOMPurify from 'dompurify';
 import { JSDOM } from 'jsdom';
+import {
+  extractYouTubePlaylistId as extractYouTubePlaylistIdFromUrl,
+  extractYouTubeVideoId as extractYouTubeVideoIdFromUrl,
+} from '@/lib/urlValidation';
 
 // Create a DOMPurify instance for server-side use
 const createDOMPurify = () => {
@@ -57,40 +61,14 @@ export const sanitizeUrl = (url: string): string => {
 
 // Extract YouTube video ID safely
 export const extractYouTubeVideoId = (url: string): string | null => {
-  try {
-    const sanitizedUrl = sanitizeUrl(url);
-    if (!sanitizedUrl) return null;
-    
-    const parsedUrl = new URL(sanitizedUrl);
-    
-    // Extract video ID from different YouTube URL formats
-    if (parsedUrl.hostname.includes('youtube.com')) {
-      const videoId = parsedUrl.searchParams.get('v');
-      return videoId && /^[a-zA-Z0-9_-]{11}$/.test(videoId) ? videoId : null;
-    } else if (parsedUrl.hostname.includes('youtu.be')) {
-      const videoId = parsedUrl.pathname.slice(1);
-      return /^[a-zA-Z0-9_-]{11}$/.test(videoId) ? videoId : null;
-    }
-    
-    return null;
-  } catch {
-    return null;
-  }
+  const sanitizedUrl = sanitizeUrl(url);
+  return sanitizedUrl ? extractYouTubeVideoIdFromUrl(sanitizedUrl) : null;
 };
 
 // Extract YouTube playlist ID safely
 export const extractYouTubePlaylistId = (url: string): string | null => {
-  try {
-    const sanitizedUrl = sanitizeUrl(url);
-    if (!sanitizedUrl) return null;
-    
-    const parsedUrl = new URL(sanitizedUrl);
-    const playlistId = parsedUrl.searchParams.get('list');
-    
-    return playlistId && /^[a-zA-Z0-9_-]+$/.test(playlistId) ? playlistId : null;
-  } catch {
-    return null;
-  }
+  const sanitizedUrl = sanitizeUrl(url);
+  return sanitizedUrl ? extractYouTubePlaylistIdFromUrl(sanitizedUrl) : null;
 };
 
 // Rate limiting helper

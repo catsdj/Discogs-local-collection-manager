@@ -15,8 +15,11 @@ import {
 } from '@/components/ui/table';
 import StyleMultiSelect from '@/components/StyleMultiSelect';
 import FilterDropdown, { FilterDropdownRef } from '@/components/FilterDropdown';
-import { getCachedDetails, isCached, clearCache, getCacheStats } from '@/lib/cache';
+import { clearCache, getCacheStats } from '@/lib/cache';
 import { isValidDiscogsUrl, isValidYouTubeUrl } from '@/lib/clientSecurity';
+import { YouTubePlaylistEmbed } from '@/components/YouTubePlaylistEmbed';
+import { YouTubeVideoEmbed } from '@/components/YouTubeVideoEmbed';
+import { extractYouTubePlaylistId, extractYouTubeVideoId } from '@/lib/urlValidation';
 import { FileText, ListMusic, TrendingUp } from 'lucide-react';
 import { toast } from 'sonner';
 import { usePlaylists } from '@/hooks/usePlaylists';
@@ -128,7 +131,6 @@ export default function DiscogsCollection() {
     queueLength: 0 
   });
   const [rowsPerPage, setRowsPerPage] = useState(25);
-  const [videosLoading, setVideosLoading] = useState(false);
   const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
   const [hasLoadedViewPreferences, setHasLoadedViewPreferences] = useState(false);
   
@@ -784,25 +786,7 @@ export default function DiscogsCollection() {
 
   const loadReleaseDetails = async (releaseId: number) => {
     try {
-      // Check cache first
-      const cached = getCachedDetails(releaseId);
-      if (cached) {
-        console.log(`Using cached data for release ${releaseId}`);
-        setReleaseDetails(prev => ({
-          ...prev,
-          [releaseId]: {
-            videos: cached.videos,
-            tracklist: cached.tracklist,
-            priceInfo: cached.priceInfo,
-            media_condition: cached.media_condition,
-            sleeve_condition: cached.sleeve_condition
-          }
-        }));
-        return;
-      }
-
-      // Fetch from API if not cached
-      console.log(`Fetching fresh data for release ${releaseId}`);
+      console.log(`Fetching release details for release ${releaseId}`);
       const response = await fetch(`/api/discogs/details?release_id=${releaseId}`);
       const result = await response.json();
       
@@ -819,57 +803,16 @@ export default function DiscogsCollection() {
         sleeve_condition: result.sleeve_condition
       };
       
-      // Note: No longer saving to browser cache - data comes from server database
-      // saveToCache(releaseId, details.videos, details.tracklist, details.priceInfo, details.media_condition, details.sleeve_condition);
-      
-      // Update state
       setReleaseDetails(prev => ({
         ...prev,
         [releaseId]: details
       }));
       
-      // Cache stats no longer updated since we're not using browser cache
-      // setCacheStats(getCacheStats());
-      
-      // Update rate limit status if provided
       if (result.rateLimit) {
         setRateLimitStatus(result.rateLimit);
       }
     } catch (error) {
       console.error('Error fetching release details:', error);
-    }
-  };
-
-  // Function to automatically load videos for all releases
-  const loadAllVideos = async () => {
-    if (!data?.releases || videosLoading) return;
-    
-    setVideosLoading(true);
-    console.log('Starting automatic video loading...');
-    
-    try {
-      const releasesToLoad = data.releases.slice(0, 10); // Limit to first 10 for performance
-      
-      // Load videos for each release
-      for (const release of releasesToLoad) {
-        const releaseId = release.basic_information.id;
-        
-        // Skip if already loaded
-        if (releaseDetails[releaseId]) {
-          continue;
-        }
-        
-        await loadReleaseDetails(releaseId);
-        
-        // Small delay to respect rate limits
-        await new Promise(resolve => setTimeout(resolve, 100));
-      }
-      
-      console.log('Automatic video loading completed');
-    } catch (error) {
-      console.error('Error during automatic video loading:', error);
-    } finally {
-      setVideosLoading(false);
     }
   };
 
@@ -920,18 +863,6 @@ export default function DiscogsCollection() {
       media: details?.media_condition || release.media_condition || 'Unknown', 
       sleeve: details?.sleeve_condition || release.sleeve_condition || 'Unknown' 
     };
-  };
-
-  // Function to extract YouTube playlist ID from URL
-  const extractYouTubePlaylistId = (url: string): string | null => {
-    const playlistMatch = url.match(/[?&]list=([^&]+)/);
-    return playlistMatch ? playlistMatch[1] : null;
-  };
-
-  // Function to extract YouTube video ID from URL
-  const extractYouTubeVideoId = (url: string): string | null => {
-    const videoMatch = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/);
-    return videoMatch ? videoMatch[1] : null;
   };
 
   // Function to categorize videos into playlists and individual videos
@@ -995,38 +926,6 @@ export default function DiscogsCollection() {
   const Spinner = () => (
     <div className="flex items-center justify-center">
       <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
-    </div>
-  );
-
-  // YouTube Playlist Embed Component
-  const YouTubePlaylistEmbed = ({ playlistId, title, isCardView = false }: { playlistId: string; title: string; isCardView?: boolean }) => (
-    <div>
-      <iframe
-        width={isCardView ? "100%" : "640"}
-        height={isCardView ? "200" : "360"}
-        src={`https://www.youtube.com/embed/videoseries?list=${playlistId}`}
-        title={title}
-        frameBorder="0"
-        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-        allowFullScreen
-        className="rounded border w-full"
-      ></iframe>
-    </div>
-  );
-
-  // YouTube Video Embed Component
-  const YouTubeVideoEmbed = ({ videoId, title, isCardView = false }: { videoId: string; title: string; isCardView?: boolean }) => (
-    <div>
-      <iframe
-        width={isCardView ? "100%" : "640"}
-        height={isCardView ? "200" : "360"}
-        src={`https://www.youtube.com/embed/${videoId}`}
-        title={title}
-        frameBorder="0"
-        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-        allowFullScreen
-        className="rounded border w-full"
-      ></iframe>
     </div>
   );
 
@@ -1173,10 +1072,9 @@ export default function DiscogsCollection() {
   const ReleaseCard = ({ release, backgroundColor = 'bg-white' }: { release: DiscogsRelease; backgroundColor?: string }) => {
     const releaseId = release.basic_information.id;
     const details = releaseDetails[releaseId];
-    // Prefer release.videos if it has data, otherwise use cached details
+    // Prefer release.videos if it has data, otherwise use details loaded from the server.
     const videos = (release.videos && release.videos.length > 0) ? release.videos : (details?.videos || []);
     const tracklist = (release.tracklist && release.tracklist.length > 0) ? release.tracklist : (details?.tracklist || []);
-    const isCachedData = isCached(releaseId);
     const { playlists, individualVideos } = categorizeVideos(videos);
     const releasePlaylist = createReleasePlaylist(individualVideos, release.basic_information.title);
     const condition = {
@@ -1326,10 +1224,6 @@ export default function DiscogsCollection() {
 
             {/* YouTube Videos */}
             <div>
-              <div className="text-xs text-muted-foreground mb-2">
-                {isCachedData ? '💾 Cached' : '🔄 Fresh'}
-              </div>
-              
               {/* Check if any videos are available */}
               {(() => {
                 const hasDiscogsVideos = release.discogsVideos && release.discogsVideos.length > 0;
@@ -1920,17 +1814,7 @@ export default function DiscogsCollection() {
       console.log(`Found ${stats.totalCached} releases in legacy browser cache (${stats.cacheSize})`);
       console.log('Consider clearing browser cache - all data is now in server database');
     }
-    
-    // Note: Not loading cache data anymore since server database is source of truth
-    // const cachedData = loadCache();
   }, []);
-
-  // Automatically load videos when data is available
-  useEffect(() => {
-    if (!includeDetails && data?.releases && data.releases.length > 0) {
-      loadAllVideos();
-    }
-  }, [data?.releases, includeDetails]);
 
   // Find release across all pages and navigate to it when coming from logs
   useEffect(() => {
@@ -2397,7 +2281,6 @@ export default function DiscogsCollection() {
                               <div className="flex items-center gap-1">
                                 <span>YouTube</span>
                                 <span className="text-xs text-muted-foreground">🎵</span>
-                                {videosLoading && <Spinner />}
                               </div>
                             </TableHead>
                             <TableHead className="whitespace-nowrap bg-background border-b">
@@ -2509,7 +2392,6 @@ export default function DiscogsCollection() {
                                   // Prefer release.videos/tracklist if they have data
                                   const videos = (release.videos && release.videos.length > 0) ? release.videos : (details?.videos || []);
                                   const tracklist = (release.tracklist && release.tracklist.length > 0) ? release.tracklist : (details?.tracklist || []);
-                                  const isCachedData = isCached(releaseId);
                                   
                                   const hasDiscogsVideos = release.discogsVideos && release.discogsVideos.length > 0;
                                   const hasYouTubePlaylist = release.youtubePlaylistId && !release.discogsVideos;
@@ -2525,15 +2407,6 @@ export default function DiscogsCollection() {
 
                                     return (
                                       <div className={totalVideos > 8 ? "space-y-1 max-h-32 overflow-y-auto bg-gray-50 p-2 rounded border" : "space-y-1"}>
-                                        <div className="flex items-center gap-1">
-                                          <span className="text-xs text-muted-foreground">
-                                            {isCachedData ? '💾' : '🔄'}
-                                          </span>
-                                          <span className="text-xs text-muted-foreground">
-                                            {isCachedData ? 'Cached' : 'Fresh'}
-                                          </span>
-                                        </div>
-                                        
                                         {/* Discogs Videos */}
                                         {hasDiscogsVideos && release.discogsVideos && (
                                           <div className="space-y-1">
@@ -2596,15 +2469,6 @@ export default function DiscogsCollection() {
                                             </a>
                                           </div>
                                         )}
-                                      </div>
-                                    );
-                                  } else if (details) {
-                                    return <span className="text-muted-foreground">No videos</span>;
-                                  } else if (videosLoading) {
-                                    return (
-                                      <div className="flex items-center gap-2">
-                                        <Spinner />
-                                        <span className="text-xs text-muted-foreground">Loading...</span>
                                       </div>
                                     );
                                   } else {

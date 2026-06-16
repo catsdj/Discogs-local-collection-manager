@@ -1,4 +1,9 @@
 import { z } from 'zod';
+import {
+  isSafeHttpsUrl,
+  isValidDiscogsUrl as isDiscogsUrl,
+  isValidYouTubeUrl as isYouTubeUrl,
+} from '@/lib/urlValidation';
 
 // Environment validation schema
 const envSchema = z.object({
@@ -107,39 +112,10 @@ export const validatePerPage = (perPage: unknown): number => {
 };
 
 // URL validation
-export const isValidUrl = (url: string): boolean => {
-  try {
-    const parsedUrl = new URL(url);
-    // Only allow HTTPS URLs for external links
-    return parsedUrl.protocol === 'https:';
-  } catch {
-    return false;
-  }
-};
+export const isValidUrl = isSafeHttpsUrl;
 
 // YouTube URL validation
-export const isValidYouTubeUrl = (url: string): boolean => {
-  const youtubeDomains = [
-    'www.youtube.com',
-    'youtube.com',
-    'youtu.be',
-    'm.youtube.com'
-  ];
-  
-  try {
-    const parsedUrl = new URL(url);
-    return youtubeDomains.includes(parsedUrl.hostname);
-  } catch {
-    return false;
-  }
-};
+export const isValidYouTubeUrl = isYouTubeUrl;
 
 // Discogs URL validation
-export const isValidDiscogsUrl = (url: string): boolean => {
-  try {
-    const parsedUrl = new URL(url);
-    return parsedUrl.hostname === 'www.discogs.com' || parsedUrl.hostname === 'discogs.com';
-  } catch {
-    return false;
-  }
-};
+export const isValidDiscogsUrl = isDiscogsUrl;

@@ -8,6 +8,7 @@ import {
   normalizeCatalogNumber,
   parseDeejayInvoicePdf,
 } from '@/lib/invoiceImport';
+import { extractYouTubeVideoId } from '@/lib/urlValidation';
 
 export const runtime = 'nodejs';
 
@@ -69,6 +70,15 @@ interface ImportSessionMetadata {
   shippingPrice: number | null;
 }
 
+type DiscogsSearchCache = Map<string, DiscogsSearchResult[]>;
+
+interface ImportSession {
+  releaseIds: Set<number>;
+  expiresAt: number;
+  metadata: ImportSessionMetadata;
+  searchResults: DiscogsSearchCache;
+}
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const MATCHER_VERSION = 'deejay-progressive-2026-04-27-2';
 const EXCELLENT_MATCH_SCORE = 90;
@@ -78,8 +88,10 @@ const DEEJAY_DEFAULT_MEDIA_CONDITION = 'Mint (M)';
 const DEEJAY_DEFAULT_SLEEVE_CONDITION = 'Mint (M)';
 const MAX_INVOICE_UPLOAD_BYTES = 5 * 1024 * 1024;
 const IMPORT_SESSION_TTL_MS = 30 * 60 * 1000;
+const COLLECTION_FOLDERS_CACHE_TTL_MS = 5 * 60 * 1000;
 let nextDiscogsRequestAt = 0;
-const importSessions = new Map<string, { releaseIds: Set<number>; expiresAt: number; metadata: ImportSessionMetadata }>();
+const importSessions = new Map<string, ImportSession>();
+let cachedCollectionFolders: { folders: DiscogsCollectionFolder[]; expiresAt: number } | null = null;
 
 function cleanupImportSessions() {
   const now = Date.now();
@@ -97,6 +109,7 @@ function createImportSession(metadata: ImportSessionMetadata): string {
     releaseIds: new Set(),
     expiresAt: Date.now() + IMPORT_SESSION_TTL_MS,
     metadata,
+    searchResults: new Map(),
   });
   return importId;
 }
@@ -284,8 +297,14 @@ function markCollectionPresence(candidates: CandidateMatch[]): CandidateMatch[] 
   }));
 }
 
-async function searchDiscogs(query: URLSearchParams): Promise<DiscogsSearchResult[]> {
-  const url = `https://api.discogs.com/database/search?${query.toString()}`;
+async function searchDiscogs(query: URLSearchParams, queryCache?: DiscogsSearchCache): Promise<DiscogsSearchResult[]> {
+  const queryKey = query.toString();
+  const cachedResults = queryCache?.get(queryKey);
+  if (cachedResults) {
+    return cachedResults;
+  }
+
+  const url = `https://api.discogs.com/database/search?${queryKey}`;
   const request = () => fetch(url, {
       headers: {
         'Authorization': `Discogs token=${config.discogsToken}`,
@@ -310,7 +329,9 @@ async function searchDiscogs(query: URLSearchParams): Promise<DiscogsSearchResul
   }
 
   const data = await response.json() as { results?: DiscogsSearchResult[] };
-  return data.results || [];
+  const results = data.results || [];
+  queryCache?.set(queryKey, results);
+  return results;
 }
 
 async function discogsFetch(url: string, init: RequestInit = {}): Promise<Response> {
@@ -326,7 +347,15 @@ async function discogsFetch(url: string, init: RequestInit = {}): Promise<Respon
   });
 }
 
-async function fetchDiscogsCollectionFolders(): Promise<DiscogsCollectionFolder[]> {
+async function fetchDiscogsCollectionFolders(options: { forceRefresh?: boolean } = {}): Promise<DiscogsCollectionFolder[]> {
+  if (
+    !options.forceRefresh &&
+    cachedCollectionFolders &&
+    cachedCollectionFolders.expiresAt > Date.now()
+  ) {
+    return cachedCollectionFolders.folders;
+  }
+
   const response = await discogsFetch(`https://api.discogs.com/users/${config.discogsUsername}/collection/folders`);
 
   if (!response.ok) {
@@ -334,7 +363,7 @@ async function fetchDiscogsCollectionFolders(): Promise<DiscogsCollectionFolder[
   }
 
   const data = await response.json() as { folders?: DiscogsCollectionFolder[] };
-  return (data.folders || [])
+  const folders = (data.folders || [])
     .filter((folder) => (
       Number.isInteger(folder.id) &&
       folder.id > 0 &&
@@ -346,6 +375,13 @@ async function fetchDiscogsCollectionFolders(): Promise<DiscogsCollectionFolder[
       name: folder.name,
       count: Number.isFinite(folder.count) ? folder.count : 0,
     }));
+
+  cachedCollectionFolders = {
+    folders,
+    expiresAt: Date.now() + COLLECTION_FOLDERS_CACHE_TTL_MS,
+  };
+
+  return folders;
 }
 
 async function fetchDiscogsRelease(releaseId: number): Promise<any> {
@@ -586,10 +622,7 @@ async function importReleaseToLocalCollection(
 
       if (video?.uri && (video.uri.includes('youtube.com') || video.uri.includes('youtu.be'))) {
         videoType = 'youtube';
-        const youtubeMatch = video.uri.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&\n?#]+)/);
-        if (youtubeMatch) {
-          youtubeVideoId = youtubeMatch[1];
-        }
+        youtubeVideoId = extractYouTubeVideoId(video.uri);
       } else if (video?.uri) {
         videoType = 'other';
       }
@@ -817,7 +850,11 @@ function parseAddSelections(
   return { selections };
 }
 
-async function findCandidates(item: DeejayInvoiceItem, debugTrace?: string[]): Promise<CandidateMatch[]> {
+async function findCandidates(
+  item: DeejayInvoiceItem,
+  debugTrace?: string[],
+  queryCache?: DiscogsSearchCache,
+): Promise<CandidateMatch[]> {
   const seenQueries = new Set<string>();
   const seenResults = new Map<number, DiscogsSearchResult>();
 
@@ -870,10 +907,10 @@ async function findCandidates(item: DeejayInvoiceItem, debugTrace?: string[]): P
     }
 
     seenQueries.add(queryKey);
-    debugTrace?.push(`query:${queryKey}`);
+    debugTrace?.push(`${queryCache?.has(queryKey) ? 'cache-hit' : 'query'}:${queryKey}`);
 
     try {
-      const results = await searchDiscogs(query);
+      const results = await searchDiscogs(query, queryCache);
       debugTrace?.push(`results:${results.length}`);
       for (const result of results) {
         if (result.type === 'release' && !seenResults.has(result.id)) {
@@ -968,12 +1005,13 @@ export async function POST(request: NextRequest) {
         searchParams.get('debug') === '1';
       const debugTrace: string[] = [];
       const importId = searchParams.get('importId') || undefined;
+      const session = getImportSession(importId);
 
       if (!item?.id || !item.catalogNumber || !item.title) {
         return NextResponse.json({ error: 'Invoice item is required' }, { status: 400 });
       }
 
-      const candidates = await findCandidates(item, debug ? debugTrace : undefined);
+      const candidates = await findCandidates(item, debug ? debugTrace : undefined, session?.searchResults);
       if (importId) {
         addCandidatesToImportSession(importId, candidates);
       }

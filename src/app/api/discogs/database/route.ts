@@ -99,6 +99,8 @@ export async function GET(request: NextRequest) {
         r.year,
         r.cover_image_url,
         r.date_added,
+        r.media_condition,
+        r.sleeve_condition,
         r.created_at,
         r.updated_at,
         r.last_sync_at,
@@ -124,20 +126,45 @@ export async function GET(request: NextRequest) {
 
     const releases = db.getDb().prepare(releasesQuery).all(...queryParams, perPage, offset) as any[];
 
-    // Transform releases to match the expected format and include videos/tracklist
+    const releaseIds = releases.map((release) => release.id);
+    const releasePlaceholders = releaseIds.map(() => '?').join(',');
+
+    const videos = releaseIds.length > 0
+      ? db.getDb().prepare(`SELECT * FROM videos WHERE release_id IN (${releasePlaceholders})`).all(...releaseIds) as any[]
+      : [];
+    const tracklist = releaseIds.length > 0
+      ? db.getDb().prepare(`SELECT * FROM tracks WHERE release_id IN (${releasePlaceholders}) ORDER BY release_id, position`).all(...releaseIds) as any[]
+      : [];
+    const prices = releaseIds.length > 0
+      ? db.getDb().prepare(`SELECT * FROM prices WHERE release_id IN (${releasePlaceholders})`).all(...releaseIds) as any[]
+      : [];
+
+    const videosByReleaseId = new Map<number, any[]>();
+    for (const video of videos) {
+      if (!videosByReleaseId.has(video.release_id)) {
+        videosByReleaseId.set(video.release_id, []);
+      }
+      videosByReleaseId.get(video.release_id)!.push(video);
+    }
+
+    const tracksByReleaseId = new Map<number, any[]>();
+    for (const track of tracklist) {
+      if (!tracksByReleaseId.has(track.release_id)) {
+        tracksByReleaseId.set(track.release_id, []);
+      }
+      tracksByReleaseId.get(track.release_id)!.push(track);
+    }
+
+    const priceByReleaseId = new Map<number, any>();
+    for (const price of prices) {
+      priceByReleaseId.set(price.release_id, price);
+    }
+
+    // Transform releases to match the expected format and include videos/tracklist.
     const transformedReleases = releases.map(release => {
-      console.log(`[DB ROUTE DEBUG] Processing release: ${release.title} (DB ID: ${release.id}, Discogs ID: ${release.discogs_id})`);
-      
-      // Get videos from database using internal ID
-      const videos = db.getDb().prepare('SELECT * FROM videos WHERE release_id = ?').all(release.id) as any[];
-      console.log(`[DB ROUTE DEBUG] Found ${videos.length} videos for ${release.title}`);
-      
-      // Get tracklist from database using internal ID
-      const tracklist = db.getDb().prepare('SELECT * FROM tracks WHERE release_id = ? ORDER BY position').all(release.id) as any[];
-      console.log(`[DB ROUTE DEBUG] Found ${tracklist.length} tracks for ${release.title}`);
-      
-      // Get price from database
-      const priceData = db.getDb().prepare('SELECT * FROM prices WHERE release_id = ?').get(release.id) as any;
+      const releaseVideos = videosByReleaseId.get(release.id) || [];
+      const releaseTracks = tracksByReleaseId.get(release.id) || [];
+      const priceData = priceByReleaseId.get(release.id);
       
       return {
         id: release.discogs_id,
@@ -154,7 +181,7 @@ export async function GET(request: NextRequest) {
         date_added: release.date_added,
         media_condition: release.media_condition || 'Unknown',
         sleeve_condition: release.sleeve_condition || 'Unknown',
-        videos: videos.map((video: any) => ({
+        videos: releaseVideos.map((video: any) => ({
           uri: video.uri,
           title: video.title,
           description: video.description || '',
@@ -162,7 +189,7 @@ export async function GET(request: NextRequest) {
           embed: Boolean(video.embed),
           youtube_video_id: video.youtube_video_id
         })),
-        tracklist: tracklist.map((track: any) => ({
+        tracklist: releaseTracks.map((track: any) => ({
           position: track.position,
           title: track.title,
           duration: track.duration || '',

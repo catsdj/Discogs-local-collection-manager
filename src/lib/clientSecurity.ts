@@ -1,4 +1,9 @@
 // Client-side security utilities for input sanitization and validation
+import {
+  isHttpOrHttpsUrl,
+  isValidDiscogsUrl as isDiscogsUrl,
+  isValidYouTubeUrl as isYouTubeUrl,
+} from '@/lib/urlValidation';
 
 // Sanitize text input to prevent XSS
 export const sanitizeTextInput = (input: string): string => {
@@ -42,41 +47,13 @@ export const isValidEmail = (email: string): boolean => {
 };
 
 // Validate URL format
-export const isValidUrl = (url: string): boolean => {
-  try {
-    const parsedUrl = new URL(url);
-    return parsedUrl.protocol === 'http:' || parsedUrl.protocol === 'https:';
-  } catch {
-    return false;
-  }
-};
+export const isValidUrl = isHttpOrHttpsUrl;
 
 // Validate YouTube URL
-export const isValidYouTubeUrl = (url: string): boolean => {
-  const youtubeDomains = [
-    'www.youtube.com',
-    'youtube.com',
-    'youtu.be',
-    'm.youtube.com'
-  ];
-  
-  try {
-    const parsedUrl = new URL(url);
-    return youtubeDomains.includes(parsedUrl.hostname);
-  } catch {
-    return false;
-  }
-};
+export const isValidYouTubeUrl = isYouTubeUrl;
 
 // Validate Discogs URL
-export const isValidDiscogsUrl = (url: string): boolean => {
-  try {
-    const parsedUrl = new URL(url);
-    return parsedUrl.hostname === 'www.discogs.com' || parsedUrl.hostname === 'discogs.com';
-  } catch {
-    return false;
-  }
-};
+export const isValidDiscogsUrl = isDiscogsUrl;
 
 
 // Sanitize and validate search input
