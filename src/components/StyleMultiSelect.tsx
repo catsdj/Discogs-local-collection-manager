@@ -1,8 +1,11 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { Check, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
+
+const DROPDOWN_GAP_PX = 4;
+const DROPDOWN_MAX_HEIGHT_PX = 240;
 
 interface StyleMultiSelectProps {
   styles: string[];
@@ -21,12 +24,15 @@ export default function StyleMultiSelect({
 }: StyleMultiSelectProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const dropdownRef = useRef<HTMLDivElement>(null);
+  const [dropdownPlacement, setDropdownPlacement] = useState<'down' | 'up'>('down');
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
         setIsOpen(false);
         setSearchTerm('');
       }
@@ -39,6 +45,52 @@ export default function StyleMultiSelect({
   const filteredStyles = styles.filter(style =>
     style.toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  const updateDropdownPlacement = useCallback(() => {
+    if (!triggerRef.current) {
+      return;
+    }
+
+    const triggerRect = triggerRef.current.getBoundingClientRect();
+    const menuHeight = Math.min(menuRef.current?.offsetHeight || DROPDOWN_MAX_HEIGHT_PX, DROPDOWN_MAX_HEIGHT_PX);
+    const spaceBelow = window.innerHeight - triggerRect.bottom - DROPDOWN_GAP_PX;
+    const spaceAbove = triggerRect.top - DROPDOWN_GAP_PX;
+
+    setDropdownPlacement(spaceBelow < menuHeight && spaceAbove > spaceBelow ? 'up' : 'down');
+  }, []);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    const frameId = window.requestAnimationFrame(updateDropdownPlacement);
+    return () => window.cancelAnimationFrame(frameId);
+  }, [isOpen, filteredStyles.length, selectedStyles.length, updateDropdownPlacement]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    window.addEventListener('resize', updateDropdownPlacement);
+    window.addEventListener('scroll', updateDropdownPlacement, true);
+
+    return () => {
+      window.removeEventListener('resize', updateDropdownPlacement);
+      window.removeEventListener('scroll', updateDropdownPlacement, true);
+    };
+  }, [isOpen, updateDropdownPlacement]);
+
+  const handleTriggerClick = () => {
+    if (isOpen) {
+      setIsOpen(false);
+      return;
+    }
+
+    updateDropdownPlacement();
+    setIsOpen(true);
+  };
 
   const handleStyleToggle = (style: string) => {
     const newSelection = selectedStyles.includes(style)
@@ -60,11 +112,12 @@ export default function StyleMultiSelect({
   };
 
   return (
-    <div className={cn("relative", className)} ref={dropdownRef}>
+    <div className={cn("relative", className)} ref={rootRef}>
       {/* Selected styles display */}
       <div
+        ref={triggerRef}
         className="min-h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm cursor-pointer hover:bg-muted/50 transition-colors"
-        onClick={() => setIsOpen(!isOpen)}
+        onClick={handleTriggerClick}
       >
         {selectedStyles.length === 0 ? (
           <span className="text-muted-foreground">{placeholder}</span>
@@ -98,7 +151,13 @@ export default function StyleMultiSelect({
 
       {/* Dropdown */}
       {isOpen && (
-        <div className="absolute z-50 w-full mt-1 bg-popover border border-border rounded-md shadow-lg max-h-60 overflow-hidden">
+        <div
+          ref={menuRef}
+          className={cn(
+            "absolute z-50 w-full bg-popover border border-border rounded-md shadow-lg max-h-60 overflow-hidden",
+            dropdownPlacement === 'up' ? 'bottom-full mb-1' : 'top-full mt-1',
+          )}
+        >
           {/* Search input */}
           <div className="p-2 border-b">
             <input
