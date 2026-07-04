@@ -4,6 +4,7 @@ import { getDatabase } from '@/lib/database';
 import { secureFetch, sanitizeErrorForLogging } from '@/lib/secureFetch';
 import { rateLimit } from '@/lib/rateLimiter';
 import { rejectIfNotLocal } from '@/lib/requestSecurity';
+import { rejectIfNotConfigured } from '@/lib/setup';
 
 /**
  * Update Collection API
@@ -23,6 +24,11 @@ export async function POST(request: NextRequest) {
   const localOnlyResponse = rejectIfNotLocal(request);
   if (localOnlyResponse) {
     return localOnlyResponse;
+  }
+
+  const setupResponse = rejectIfNotConfigured();
+  if (setupResponse) {
+    return setupResponse;
   }
 
   const rateLimitResult = rateLimit(request, '/api/discogs/update-collection');

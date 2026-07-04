@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDatabaseSyncService } from '@/lib/databaseSyncService';
 import { rejectIfNotLocal } from '@/lib/requestSecurity';
+import { rejectIfNotConfigured } from '@/lib/setup';
 
 export async function GET(request: NextRequest) {
   const localOnlyResponse = rejectIfNotLocal(request);
@@ -24,6 +25,11 @@ export async function GET(request: NextRequest) {
     }
 
     if (action === 'trigger') {
+      const setupResponse = rejectIfNotConfigured();
+      if (setupResponse) {
+        return setupResponse;
+      }
+
       // Trigger manual sync
       syncService.runSyncJob();
       return NextResponse.json({
@@ -62,6 +68,11 @@ export async function POST(request: NextRequest) {
     const syncService = getDatabaseSyncService();
 
     if (action === 'trigger') {
+      const setupResponse = rejectIfNotConfigured();
+      if (setupResponse) {
+        return setupResponse;
+      }
+
       // Trigger manual sync
       syncService.runSyncJob();
       return NextResponse.json({

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { config } from '@/lib/config';
 import { getDatabase } from '@/lib/database';
 import { rejectIfNotLocal } from '@/lib/requestSecurity';
+import { rejectIfNotConfigured } from '@/lib/setup';
 import {
   DeejayInvoiceItem,
   generateCatalogVariants,
@@ -970,6 +971,11 @@ export async function GET(request: NextRequest) {
     return localOnlyResponse;
   }
 
+  const setupResponse = rejectIfNotConfigured();
+  if (setupResponse) {
+    return setupResponse;
+  }
+
   try {
     const { searchParams } = new URL(request.url);
     const action = searchParams.get('action');
@@ -992,6 +998,11 @@ export async function POST(request: NextRequest) {
 
   if (localOnlyResponse) {
     return localOnlyResponse;
+  }
+
+  const setupResponse = rejectIfNotConfigured();
+  if (setupResponse) {
+    return setupResponse;
   }
 
   try {

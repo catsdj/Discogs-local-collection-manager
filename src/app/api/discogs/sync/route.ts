@@ -23,6 +23,7 @@ import {
 import { rateLimit, getRateLimitHeaders } from '@/lib/rateLimiter';
 import { logApiRequest, logValidationError } from '@/lib/logger';
 import { rejectIfNotLocal } from '@/lib/requestSecurity';
+import { rejectIfNotConfigured } from '@/lib/setup';
 
 // POST - Start cache synchronization
 export async function POST(request: NextRequest) {
@@ -31,6 +32,11 @@ export async function POST(request: NextRequest) {
   
   if (localOnlyResponse) {
     return localOnlyResponse;
+  }
+
+  const setupResponse = rejectIfNotConfigured();
+  if (setupResponse) {
+    return setupResponse;
   }
   
   try {

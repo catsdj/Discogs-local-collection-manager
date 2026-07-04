@@ -23,6 +23,25 @@ import { extractYouTubePlaylistId, extractYouTubeVideoId } from '@/lib/urlValida
 import { FileText, ListMusic, TrendingUp } from 'lucide-react';
 import { toast } from 'sonner';
 import { usePlaylists } from '@/hooks/usePlaylists';
+import SetupRequiredCard from '@/components/SetupRequiredCard';
+
+const SETUP_REQUIRED_CODE = 'SETUP_REQUIRED';
+
+type SetupInfo = {
+  configured: boolean;
+  missing: string[];
+  message: string | null;
+  steps: string[];
+  quickSetup: string;
+};
+
+async function readJsonResponse(response: Response) {
+  const contentType = response.headers.get('content-type') ?? '';
+  if (!contentType.includes('application/json')) {
+    throw new Error('NON_JSON_RESPONSE');
+  }
+  return response.json();
+}
 
 // Helper function to format currency with proper symbols
 function formatCurrency(amount: number, currency: string = 'USD'): string {
@@ -120,6 +139,7 @@ export default function DiscogsCollection() {
   const [data, setData] = useState<CollectionData | null>(null);
   const [selectedStyles, setSelectedStyles] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [setupStatus, setSetupStatus] = useState<SetupInfo | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [allAvailableStyles, setAllAvailableStyles] = useState<string[]>([]);
   const [includeDetails, setIncludeDetails] = useState(true);
@@ -518,8 +538,18 @@ export default function DiscogsCollection() {
         setError(`Rate limit exceeded. Please wait ${retrySeconds} seconds before trying again.`);
         return;
       }
-      
-      const result = await response.json();
+
+      const result = await readJsonResponse(response);
+
+      if (!response.ok) {
+        if (result.code === SETUP_REQUIRED_CODE && result.setup) {
+          setSetupStatus(result.setup);
+          setError(null);
+          return;
+        }
+        setError(result.message || result.error || 'Failed to fetch collection');
+        return;
+      }
       
       if (result.error) {
         setError(result.error);
@@ -541,7 +571,11 @@ export default function DiscogsCollection() {
       }
     } catch (error) {
       console.error('Error fetching collection:', error);
-      setError('Failed to fetch collection');
+      if (error instanceof Error && error.message === 'NON_JSON_RESPONSE') {
+        setError('The server returned an unexpected error. Check the terminal for details.');
+      } else {
+        setError('Failed to fetch collection');
+      }
     } finally {
       setIsLoading(false);
     }
@@ -569,20 +603,27 @@ export default function DiscogsCollection() {
 
   // Smart sync collection - checks if sync is needed before syncing
   const handleUpdateCollection = async () => {
+    if (setupStatus && !setupStatus.configured) {
+      toast.error('Configure Discogs API credentials in .env.local first');
+      return;
+    }
+
     setIsLoading(true);
     try {
       const response = await fetch('/api/discogs/update-collection', {
         method: 'POST',
       });
 
+      const result = await readJsonResponse(response);
+
       if (response.ok) {
-        const result = await response.json();
         toast.success(`Collection updated: ${result.newReleases || 0} new releases, ${result.conditionsUpdated || 0} conditions updated`);
-        // Reload collection to show new releases
         await fetchCollection(selectedStyles, currentPage, includeDetails);
+      } else if (result.code === SETUP_REQUIRED_CODE && result.setup) {
+        setSetupStatus(result.setup);
+        toast.error(result.message || 'Discogs API credentials are not configured');
       } else {
-        const error = await response.json();
-        toast.error(`Update failed: ${error.message || 'Unknown error'}`);
+        toast.error(`Update failed: ${result.message || result.error || 'Unknown error'}`);
       }
     } catch (error) {
       console.error('Error updating collection:', error);
@@ -593,17 +634,20 @@ export default function DiscogsCollection() {
   };
 
   const handleSyncCollection = async () => {
+    if (setupStatus && !setupStatus.configured) {
+      toast.error('Configure Discogs API credentials in .env.local first');
+      return;
+    }
+
     setIsLoading(true);
     setError(null);
     
     try {
       toast.info('Checking collection status...');
       
-      // First check if sync is needed by comparing counts
       const statusResponse = await fetch('/api/discogs/database-sync?action=status');
-      const statusResult = await statusResponse.json();
+      await readJsonResponse(statusResponse);
       
-      // Trigger database sync which will check and sync if needed
       const response = await fetch('/api/discogs/database-sync', {
         method: 'POST',
         headers: {
@@ -612,8 +656,14 @@ export default function DiscogsCollection() {
         body: JSON.stringify({ action: 'trigger' }),
       });
 
-      const result = await response.json();
+      const result = await readJsonResponse(response);
       
+      if (result.code === SETUP_REQUIRED_CODE && result.setup) {
+        setSetupStatus(result.setup);
+        toast.error(result.message || 'Discogs API credentials are not configured');
+        return;
+      }
+
       if (result.error) {
         toast.error('Sync failed: ' + result.error);
         setError(result.error);
@@ -1691,10 +1741,10 @@ export default function DiscogsCollection() {
             <CardTitle className="text-base">Actions</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3 px-4">
-            <Button onClick={handleSyncCollection} disabled={isLoading} className="w-full">
+            <Button onClick={handleSyncCollection} disabled={discogsActionsDisabled} className="w-full">
               {isLoading ? 'Fetching...' : 'Get Release Data'}
             </Button>
-            <Button variant="outline" onClick={handleUpdateCollection} disabled={isLoading} className="w-full">
+            <Button variant="outline" onClick={handleUpdateCollection} disabled={discogsActionsDisabled} className="w-full">
               {isLoading ? 'Updating...' : 'Update Collection'}
             </Button>
             <div className="rounded-md bg-muted p-2 text-xs text-muted-foreground">
@@ -1771,6 +1821,31 @@ export default function DiscogsCollection() {
     }
 
     setHasLoadedViewPreferences(true);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadSetupStatus = async () => {
+      try {
+        const response = await fetch('/api/setup');
+        if (!response.ok) {
+          return;
+        }
+        const result = await readJsonResponse(response);
+        if (!cancelled) {
+          setSetupStatus(result);
+        }
+      } catch (error) {
+        console.error('Error loading setup status:', error);
+      }
+    };
+
+    loadSetupStatus();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Load all styles when component mounts
@@ -1890,8 +1965,15 @@ export default function DiscogsCollection() {
   // Note: Pagination reset is now handled server-side when filters/sorting change
 
 
+  const discogsActionsDisabled = isLoading || setupStatus?.configured === false;
+
   return (
     <div className="w-full">
+      {setupStatus && !setupStatus.configured && (
+        <div className="mb-4">
+          <SetupRequiredCard setup={setupStatus} />
+        </div>
+      )}
       {/* Job Status Display */}
       <JobStatusDisplay />
 
@@ -1915,14 +1997,14 @@ export default function DiscogsCollection() {
             <div className="flex flex-wrap gap-2 lg:hidden">
           <Button
                 onClick={handleSyncCollection}
-            disabled={isLoading}
+            disabled={discogsActionsDisabled}
           >
             {isLoading ? 'Fetching...' : 'Get Release Data'}
           </Button>
           <Button
             variant="outline"
             onClick={handleUpdateCollection}
-            disabled={isLoading}
+            disabled={discogsActionsDisabled}
           >
             {isLoading ? 'Updating...' : 'Update Collection'}
           </Button>

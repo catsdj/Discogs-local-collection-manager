@@ -6,6 +6,15 @@ import { AlertCircle, CheckCircle2, ExternalLink, FileText, PlusCircle, Search, 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select } from '@/components/ui/select';
+import SetupRequiredCard from '@/components/SetupRequiredCard';
+
+type SetupInfo = {
+  configured: boolean;
+  missing: string[];
+  message: string | null;
+  steps: string[];
+  quickSetup: string;
+};
 
 interface InvoiceCandidate {
   id: number;
@@ -94,6 +103,7 @@ export default function InvoiceImportClient() {
   const [addResults, setAddResults] = useState<AddCollectionResult[] | null>(null);
   const [addMessage, setAddMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [setupStatus, setSetupStatus] = useState<SetupInfo | null>(null);
   const importRunRef = useRef(0);
 
   const selectedCount = useMemo(
@@ -128,6 +138,31 @@ export default function InvoiceImportClient() {
   useEffect(() => {
     let cancelled = false;
 
+    async function loadSetupStatus() {
+      try {
+        const response = await fetch('/api/setup');
+        if (!response.ok) {
+          return;
+        }
+        const payload = await response.json();
+        if (!cancelled) {
+          setSetupStatus(payload);
+        }
+      } catch {
+        // Setup status is optional; folder load will surface credential errors.
+      }
+    }
+
+    void loadSetupStatus();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
     async function loadCollectionFolders() {
       setIsLoadingFolders(true);
       setFolderError(null);
@@ -137,7 +172,10 @@ export default function InvoiceImportClient() {
         const payload = await response.json();
 
         if (!response.ok) {
-          throw new Error(payload.error || 'Failed to load Discogs folders');
+          if (payload.code === 'SETUP_REQUIRED' && payload.setup) {
+            setSetupStatus(payload.setup);
+          }
+          throw new Error(payload.message || payload.error || 'Failed to load Discogs folders');
         }
 
         if (!cancelled) {
@@ -399,6 +437,8 @@ export default function InvoiceImportClient() {
         </Button>
       </div>
 
+      {setupStatus && !setupStatus.configured && <SetupRequiredCard setup={setupStatus} />}
+
       <Card className="rounded-lg">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -417,7 +457,7 @@ export default function InvoiceImportClient() {
               onChange={handleFileChange}
               className="w-full rounded-md border bg-background px-3 py-2 text-sm sm:max-w-md"
             />
-            <Button onClick={handleImport} disabled={!file || isImporting || isMatching}>
+            <Button onClick={handleImport} disabled={!file || isImporting || isMatching || setupStatus?.configured === false}>
               {isImporting ? (
                 <>
                   <Search className="h-4 w-4 animate-pulse" />

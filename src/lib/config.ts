@@ -12,11 +12,37 @@ const envSchema = z.object({
   NEXT_PUBLIC_APP_URL: z.string().url().optional().default('http://localhost:3000'),
 });
 
-// Validate environment variables with helpful error messages
-const validateEnv = () => {
-  // Only validate on server-side
+export type DiscogsCredentialKey = 'DISCOGS_API_TOKEN' | 'DISCOGS_USERNAME';
+
+export type DiscogsSetupStatus = {
+  configured: boolean;
+  missing: DiscogsCredentialKey[];
+};
+
+let hasLoggedSetupWarning = false;
+
+export function getDiscogsSetupStatus(): DiscogsSetupStatus {
   if (typeof window !== 'undefined') {
-    // On client-side, return a minimal config
+    return { configured: false, missing: ['DISCOGS_API_TOKEN', 'DISCOGS_USERNAME'] };
+  }
+
+  const missing: DiscogsCredentialKey[] = [];
+  if (!process.env.DISCOGS_API_TOKEN?.trim()) {
+    missing.push('DISCOGS_API_TOKEN');
+  }
+  if (!process.env.DISCOGS_USERNAME?.trim()) {
+    missing.push('DISCOGS_USERNAME');
+  }
+
+  return {
+    configured: missing.length === 0,
+    missing,
+  };
+}
+
+// Validate environment variables without crashing the app at import time
+const validateEnv = () => {
+  if (typeof window !== 'undefined') {
     return {
       DISCOGS_API_TOKEN: '',
       DISCOGS_USERNAME: '',
@@ -24,21 +50,27 @@ const validateEnv = () => {
     };
   }
 
-  try {
-    return envSchema.parse(process.env);
-  } catch {
-    // Sanitized error logging - don't expose which specific vars are missing
-    console.error('❌ Environment configuration error: Missing or invalid credentials');
-    
-    // Check if we're missing the environment variables
-    if (!process.env.DISCOGS_API_TOKEN || !process.env.DISCOGS_USERNAME) {
-      // Log minimal setup info without exposing config details
-      console.error('🔧 SETUP REQUIRED: Discogs API credentials missing. See env.example for configuration template.');
-    }
-    
-    // Generic error message
-    throw new Error('Environment validation failed - check server logs and verify .env.local configuration');
+  const parsed = envSchema.safeParse(process.env);
+  if (parsed.success) {
+    return parsed.data;
   }
+
+  if (!hasLoggedSetupWarning) {
+    hasLoggedSetupWarning = true;
+    const status = getDiscogsSetupStatus();
+    console.warn(
+      'Discogs API credentials are not configured. Copy env.example to .env.local or run npm run setup.',
+    );
+    if (status.missing.length > 0) {
+      console.warn(`Missing: ${status.missing.join(', ')}`);
+    }
+  }
+
+  return {
+    DISCOGS_API_TOKEN: process.env.DISCOGS_API_TOKEN?.trim() || '',
+    DISCOGS_USERNAME: process.env.DISCOGS_USERNAME?.trim() || '',
+    NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000',
+  };
 };
 
 // Export validated config
@@ -66,6 +98,12 @@ export function getDiscogsCredentials() {
   if (typeof window !== 'undefined') {
     throw new Error('Discogs credentials cannot be accessed on client-side');
   }
+
+  const status = getDiscogsSetupStatus();
+  if (!status.configured) {
+    throw new Error('SETUP_REQUIRED');
+  }
+
   return {
     token: config.discogsToken,
     username: config.discogsUsername,
