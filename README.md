@@ -90,9 +90,10 @@ npm run setup
 
 This runs `scripts/setup.cjs`, a small terminal wizard that:
 
-1. Checks whether `.env.local` already exists (and asks before overwriting)
-2. Prompts for your **Discogs API token**, **username**, and optional **app URL**
-3. Writes `.env.local` with the values you entered
+1. Creates the `data/` directory and local SQLite file (`data/discogs_collection.db`)
+2. Checks whether `.env.local` already exists (and asks before overwriting)
+3. Prompts for your **Discogs API token**, **username**, and optional **app URL**
+4. Writes `.env.local` with the values you entered
 
 After it finishes, restart the dev server if it is already running:
 
@@ -108,6 +109,7 @@ Copy the template and edit it yourself:
 
 ```bash
 cp env.example .env.local
+npm run db:init
 ```
 
 Then set these values in `.env.local`:
@@ -151,7 +153,8 @@ If something still fails, check the terminal for warnings about missing `DISCOGS
 | `npm run build`          | Build production artifacts              |
 | `npm run start`          | Run production server                   |
 | `npm run lint`           | Run ESLint                              |
-| `npm run setup`          | Interactive `.env.local` setup          |
+| `npm run setup`          | Interactive `.env.local` setup and local DB creation |
+| `npm run db:init`        | Create `data/` and the SQLite database file only     |
 | `npm run security:audit` | Run production dependency audit         |
 | `npm run security:fix`   | Apply production dependency audit fixes |
 | `npm run security:check` | Check outdated packages and audit       |

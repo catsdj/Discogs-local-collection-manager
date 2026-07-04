@@ -8,6 +8,7 @@
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
+const { initializeLocalDatabase } = require('./init-database.cjs');
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -19,6 +20,16 @@ const question = (query) => new Promise((resolve) => rl.question(query, resolve)
 async function setup() {
   console.log('🎵 Discogs Collection Manager Setup');
   console.log('=====================================\n');
+
+  try {
+    console.log('💾 Preparing local database...');
+    const dbPath = initializeLocalDatabase();
+    console.log(`✅ Database file created at ${dbPath}\n`);
+  } catch (error) {
+    console.error(`❌ Database setup failed: ${error.message}`);
+    rl.close();
+    return;
+  }
 
   const envLocalPath = path.join(process.cwd(), '.env.local');
   const envExamplePath = path.join(process.cwd(), 'env.example');

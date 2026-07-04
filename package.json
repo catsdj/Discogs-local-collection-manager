@@ -14,6 +14,7 @@
     "lint": "eslint",
     "test": "echo \"Error: no test specified\" && exit 1",
     "setup": "node scripts/setup.cjs",
+    "db:init": "node scripts/init-database.cjs",
     "security:audit": "npm audit --production",
     "security:fix": "npm audit fix --production",
     "security:check": "npm outdated && npm audit --production"

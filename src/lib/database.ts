@@ -1,7 +1,12 @@
 import Database from 'better-sqlite3';
+import fs from 'fs';
 import path from 'path';
 
 const DB_PATH = path.join(process.cwd(), 'data', 'discogs_collection.db');
+
+function ensureDatabaseDirectory(): void {
+  fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+}
 
 export interface ReleaseRecord {
   id: number;
@@ -134,6 +139,7 @@ export class DiscogsDatabase {
   private db: Database.Database;
 
   constructor() {
+    ensureDatabaseDirectory();
     this.db = new Database(DB_PATH);
     this.configurePragmas();
     this.initializeDatabase();
