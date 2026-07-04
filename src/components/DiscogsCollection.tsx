@@ -1707,6 +1707,45 @@ export default function DiscogsCollection() {
     </div>
   );
 
+  const CollectionPagination = () => {
+    const totalPages = data?.pagination?.pages || 1;
+    const page = data?.pagination?.page || currentPage;
+
+    return (
+      <div className="flex items-center gap-4">
+        <div className="text-sm text-muted-foreground">
+          Page {page} of {totalPages}
+        </div>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              const newPage = Math.max(1, currentPage - 1);
+              setCurrentPage(newPage);
+              fetchCollection(selectedStyles, newPage, includeDetails);
+            }}
+            disabled={currentPage === 1}
+          >
+            Previous
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              const newPage = Math.min(totalPages, currentPage + 1);
+              setCurrentPage(newPage);
+              fetchCollection(selectedStyles, newPage, includeDetails);
+            }}
+            disabled={currentPage === totalPages}
+          >
+            Next
+          </Button>
+        </div>
+      </div>
+    );
+  };
+
   const CollectionSidebar = () => (
     <aside className="hidden lg:block">
       <div className="sticky top-4 space-y-4">
@@ -2120,6 +2159,9 @@ export default function DiscogsCollection() {
                           Showing {data?.releases?.length || 0} of {data?.totalFiltered || 0} releases
                           {(data?.pagination?.pages || 1) > 1 && ` • Page ${data?.pagination?.page || currentPage} of ${data?.pagination?.pages || 1}`}
                         </div>
+                      </div>
+                      <div className="flex justify-end">
+                        <CollectionPagination />
                       </div>
                       {viewMode === 'table' ? (
                         <div className="border rounded-lg overflow-hidden">
@@ -2653,37 +2695,7 @@ export default function DiscogsCollection() {
                       {/* Bottom pagination controls */}
                       <div className="flex justify-between items-center">
                         <RowsPerPageDropdown />
-                        <div className="flex items-center gap-4">
-                          <div className="text-sm text-muted-foreground">
-                            Page {data?.pagination?.page || currentPage} of {data?.pagination?.pages || 1}
-                          </div>
-                          <div className="flex gap-2">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => {
-                                const newPage = Math.max(1, currentPage - 1);
-                                setCurrentPage(newPage);
-                                fetchCollection(selectedStyles, newPage, includeDetails);
-                              }}
-                              disabled={currentPage === 1}
-                            >
-                              Previous
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => {
-                                const newPage = Math.min(data?.pagination?.pages || 1, currentPage + 1);
-                                setCurrentPage(newPage);
-                                fetchCollection(selectedStyles, newPage, includeDetails);
-                              }}
-                              disabled={currentPage === (data?.pagination?.pages || 1)}
-                            >
-                              Next
-                            </Button>
-                          </div>
-                        </div>
+                        <CollectionPagination />
                       </div>
                     </div>
 
