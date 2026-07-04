@@ -13,6 +13,9 @@ interface StyleMultiSelectProps {
   onSelectionChange: (selectedStyles: string[]) => void;
   placeholder?: string;
   className?: string;
+  testId?: string;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
 export default function StyleMultiSelect({
@@ -20,27 +23,57 @@ export default function StyleMultiSelect({
   selectedStyles,
   onSelectionChange,
   placeholder = "Select styles...",
-  className
+  className,
+  testId,
+  open,
+  onOpenChange,
 }: StyleMultiSelectProps) {
-  const [isOpen, setIsOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const isOpen = open ?? internalOpen;
+
+  const setIsOpen = useCallback((nextOpen: boolean) => {
+    if (onOpenChange) {
+      onOpenChange(nextOpen);
+    } else {
+      setInternalOpen(nextOpen);
+    }
+  }, [onOpenChange]);
+
   const [searchTerm, setSearchTerm] = useState('');
   const [dropdownPlacement, setDropdownPlacement] = useState<'down' | 'up'>('down');
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  // Close dropdown when clicking outside
+  // Close dropdown when clicking outside (only while open).
+  // Ignore clicks inside any StyleMultiSelect root so duplicate instances
+  // (e.g. sidebar + mobile) sharing one open state do not close each other.
   useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
     const handleClickOutside = (event: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
-        setSearchTerm('');
+      const target = event.target;
+      if (!(target instanceof Node)) {
+        return;
       }
+
+      if (rootRef.current?.contains(target)) {
+        return;
+      }
+
+      if (target instanceof Element && target.closest('[data-style-multiselect-root]')) {
+        return;
+      }
+
+      setIsOpen(false);
+      setSearchTerm('');
     };
 
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  }, [isOpen, setIsOpen]);
 
   const filteredStyles = styles.filter(style =>
     style.toLowerCase().includes(searchTerm.toLowerCase())
@@ -100,6 +133,12 @@ export default function StyleMultiSelect({
     onSelectionChange(newSelection);
   };
 
+  const handleMenuMouseDown = (event: React.MouseEvent) => {
+    // Keep focus in the menu while toggling options.
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
   const removeStyle = (style: string, e: React.MouseEvent) => {
     e.stopPropagation();
     const newSelection = selectedStyles.filter(s => s !== style);
@@ -112,10 +151,16 @@ export default function StyleMultiSelect({
   };
 
   return (
-    <div className={cn("relative", className)} ref={rootRef}>
+    <div
+      className={cn("relative", className)}
+      ref={rootRef}
+      data-style-multiselect-root
+      data-testid={testId}
+    >
       {/* Selected styles display */}
       <div
         ref={triggerRef}
+        data-testid={testId ? `${testId}-trigger` : undefined}
         className="min-h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm cursor-pointer hover:bg-muted/50 transition-colors"
         onClick={handleTriggerClick}
       >
@@ -153,6 +198,8 @@ export default function StyleMultiSelect({
       {isOpen && (
         <div
           ref={menuRef}
+          data-testid={testId ? `${testId}-menu` : undefined}
+          onMouseDown={handleMenuMouseDown}
           className={cn(
             "absolute z-50 w-full bg-popover border border-border rounded-md shadow-lg max-h-60 overflow-hidden",
             dropdownPlacement === 'up' ? 'bottom-full mb-1' : 'top-full mt-1',
@@ -180,6 +227,7 @@ export default function StyleMultiSelect({
               filteredStyles.map((style) => (
                 <div
                   key={style}
+                  data-testid={testId ? `${testId}-option-${style}` : undefined}
                   className="flex items-center px-3 py-2 text-sm hover:bg-muted cursor-pointer"
                   onClick={() => handleStyleToggle(style)}
                 >
