@@ -70,17 +70,77 @@ This is WIP. Bugs and inconsistencies may be present :)
 
 ```bash
 npm install
-npm run setup
+npm run setup   # or configure .env.local manually — see Setup below
 npm run dev
 ```
 
-If you prefer manual setup, copy [`env.example`](env.example) to `.env.local` and set:
+Open [http://localhost:3000](http://localhost:3000).
 
-- `DISCOGS_API_TOKEN`
-- `DISCOGS_USERNAME`
-- optional app/admin settings as documented in the template
+## Setup
 
-Create a Discogs token at [Discogs developer settings](https://www.discogs.com/settings/developers).
+The app needs Discogs API credentials before it can sync your collection or call Discogs on your behalf. Credentials live in `.env.local` in the project root (gitignored).
+
+You can configure them in either of two ways.
+
+### Option 1: Interactive setup (recommended)
+
+```bash
+npm run setup
+```
+
+This runs `scripts/setup.cjs`, a small terminal wizard that:
+
+1. Checks whether `.env.local` already exists (and asks before overwriting)
+2. Prompts for your **Discogs API token**, **username**, and optional **app URL**
+3. Writes `.env.local` with the values you entered
+
+After it finishes, restart the dev server if it is already running:
+
+```bash
+npm run dev
+```
+
+Create a personal access token at [Discogs developer settings](https://www.discogs.com/settings/developers). Use the same Discogs username you sign in with.
+
+### Option 2: Manual setup
+
+Copy the template and edit it yourself:
+
+```bash
+cp env.example .env.local
+```
+
+Then set these values in `.env.local`:
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `DISCOGS_API_TOKEN` | Yes, for sync | Personal access token from Discogs |
+| `DISCOGS_USERNAME` | Yes, for sync | Your Discogs username |
+| `NEXT_PUBLIC_APP_URL` | No | App base URL (defaults to `http://localhost:3000`) |
+| `ADMIN_TOKEN` | No | Protects `/api/performance` in non-dev deployments |
+
+See [`env.example`](env.example) for the full template and comments.
+
+### What works without credentials?
+
+The app **starts without** `.env.local`. You are not blocked at install time.
+
+| With credentials | Without credentials |
+| --- | --- |
+| Browse your local SQLite collection | Browse your local SQLite collection (if already synced) |
+| Update collection from Discogs | Setup guidance shown in the UI |
+| Sync release data, prices, videos | Sync buttons disabled |
+| Invoice import against Discogs | Invoice import blocked until configured |
+
+If credentials are missing, the UI shows a setup card with steps. API routes that talk to Discogs return a structured `SETUP_REQUIRED` response instead of crashing the server.
+
+### Verify setup
+
+1. Run `npm run dev`
+2. Open the collection page — the setup banner should be gone
+3. Use **Update Collection** or **Get Release Data** — they should be enabled and reach Discogs
+
+If something still fails, check the terminal for warnings about missing `DISCOGS_API_TOKEN` or `DISCOGS_USERNAME`.
 
 ## Scripts
 
