@@ -10,6 +10,7 @@ import {
   parseDeejayInvoicePdf,
 } from '@/lib/invoiceImport';
 import { extractYouTubeVideoId } from '@/lib/urlValidation';
+import { secureFetch } from '@/lib/secureFetch';
 
 export const runtime = 'nodejs';
 
@@ -57,6 +58,7 @@ interface DiscogsCollectionInstance {
 interface AddCollectionSelection {
   releaseId: number;
   folderId: number;
+  invoiceItemLabel?: string;
 }
 
 interface AddCollectionRequest {
@@ -80,11 +82,22 @@ interface ImportSession {
   searchResults: DiscogsSearchCache;
 }
 
+interface InvoiceAddLogContext {
+  importId: string;
+  releaseId: number;
+  folderId: number;
+  folderName: string;
+  itemNumber: number;
+  totalItems: number;
+  invoiceItemLabel?: string;
+}
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const MATCHER_VERSION = 'deejay-progressive-2026-04-27-2';
 const EXCELLENT_MATCH_SCORE = 90;
 const DISCOGS_REQUEST_DELAY_MS = 7000;
 const DISCOGS_429_BACKOFF_MS = 30000;
+const DISCOGS_REQUEST_TIMEOUT_MS = 30000;
 const DEEJAY_DEFAULT_MEDIA_CONDITION = 'Mint (M)';
 const DEEJAY_DEFAULT_SLEEVE_CONDITION = 'Mint (M)';
 const MAX_INVOICE_UPLOAD_BYTES = 5 * 1024 * 1024;
@@ -93,6 +106,27 @@ const COLLECTION_FOLDERS_CACHE_TTL_MS = 5 * 60 * 1000;
 let nextDiscogsRequestAt = 0;
 const importSessions = new Map<string, ImportSession>();
 let cachedCollectionFolders: { folders: DiscogsCollectionFolder[]; expiresAt: number } | null = null;
+
+function logInvoiceAddEvent(
+  event: string,
+  context: Partial<InvoiceAddLogContext> = {},
+  details: Record<string, unknown> = {},
+) {
+  console.info('[invoice-add]', {
+    event,
+    at: new Date().toISOString(),
+    ...context,
+    ...details,
+  });
+}
+
+function getDiscogsEndpoint(url: string): string {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return 'unknown';
+  }
+}
 
 function cleanupImportSessions() {
   const now = Date.now();
@@ -335,17 +369,67 @@ async function searchDiscogs(query: URLSearchParams, queryCache?: DiscogsSearchC
   return results;
 }
 
-async function discogsFetch(url: string, init: RequestInit = {}): Promise<Response> {
-  await waitForDiscogsSlot();
+async function discogsFetch(
+  url: string,
+  init: RequestInit = {},
+  invoiceAddContext?: InvoiceAddLogContext,
+  operation = 'Discogs request',
+): Promise<Response> {
+  const startedAt = Date.now();
+  const endpoint = getDiscogsEndpoint(url);
+  const method = init.method || 'GET';
 
-  return fetch(url, {
-    ...init,
-    headers: {
-      'User-Agent': config.userAgent,
-      'Authorization': `Discogs token=${config.discogsToken}`,
-      ...(init.headers || {}),
-    },
-  });
+  if (invoiceAddContext) {
+    logInvoiceAddEvent('discogs_request_started', invoiceAddContext, {
+      operation,
+      method,
+      endpoint,
+    });
+  }
+
+  await waitForDiscogsSlot();
+  const rateLimitWaitMs = Date.now() - startedAt;
+
+  try {
+    const response = await secureFetch(url, {
+      ...init,
+      // A Discogs request must not keep the invoice endpoint open forever. A
+      // retry is useful for transient failures, while keeping add operations
+      // bounded; duplicate adds are handled by the collection-instance check.
+      timeout: DISCOGS_REQUEST_TIMEOUT_MS,
+      retries: 1,
+      headers: {
+        'User-Agent': config.userAgent,
+        'Authorization': `Discogs token=${config.discogsToken}`,
+        ...(init.headers || {}),
+      },
+    });
+
+    if (invoiceAddContext) {
+      logInvoiceAddEvent('discogs_request_completed', invoiceAddContext, {
+        operation,
+        method,
+        endpoint,
+        status: response.status,
+        rateLimitWaitMs,
+        durationMs: Date.now() - startedAt,
+      });
+    }
+
+    return response;
+  } catch (error) {
+    if (invoiceAddContext) {
+      logInvoiceAddEvent('discogs_request_failed', invoiceAddContext, {
+        operation,
+        method,
+        endpoint,
+        rateLimitWaitMs,
+        durationMs: Date.now() - startedAt,
+        error: error instanceof Error ? error.message : 'Unknown Discogs request error',
+      });
+    }
+    throw error;
+  }
 }
 
 async function fetchDiscogsCollectionFolders(options: { forceRefresh?: boolean } = {}): Promise<DiscogsCollectionFolder[]> {
@@ -385,8 +469,13 @@ async function fetchDiscogsCollectionFolders(options: { forceRefresh?: boolean }
   return folders;
 }
 
-async function fetchDiscogsRelease(releaseId: number): Promise<any> {
-  const response = await discogsFetch(`https://api.discogs.com/releases/${releaseId}`);
+async function fetchDiscogsRelease(releaseId: number, invoiceAddContext?: InvoiceAddLogContext): Promise<any> {
+  const response = await discogsFetch(
+    `https://api.discogs.com/releases/${releaseId}`,
+    {},
+    invoiceAddContext,
+    'fetch release details',
+  );
 
   if (!response.ok) {
     throw new Error(`Discogs release fetch failed with ${response.status}`);
@@ -395,8 +484,13 @@ async function fetchDiscogsRelease(releaseId: number): Promise<any> {
   return response.json();
 }
 
-async function fetchDiscogsMarketplaceStats(releaseId: number): Promise<any | null> {
-  const response = await discogsFetch(`https://api.discogs.com/marketplace/stats/${releaseId}`);
+async function fetchDiscogsMarketplaceStats(releaseId: number, invoiceAddContext?: InvoiceAddLogContext): Promise<any | null> {
+  const response = await discogsFetch(
+    `https://api.discogs.com/marketplace/stats/${releaseId}`,
+    {},
+    invoiceAddContext,
+    'fetch marketplace stats',
+  );
 
   if (!response.ok) {
     return null;
@@ -405,9 +499,15 @@ async function fetchDiscogsMarketplaceStats(releaseId: number): Promise<any | nu
   return response.json();
 }
 
-async function getDiscogsCollectionInstances(releaseId: number): Promise<DiscogsCollectionInstance[]> {
+async function getDiscogsCollectionInstances(
+  releaseId: number,
+  invoiceAddContext?: InvoiceAddLogContext,
+): Promise<DiscogsCollectionInstance[]> {
   const response = await discogsFetch(
     `https://api.discogs.com/users/${config.discogsUsername}/collection/releases/${releaseId}`,
+    {},
+    invoiceAddContext,
+    'look up collection instances',
   );
 
   if (!response.ok) {
@@ -437,6 +537,7 @@ async function setDiscogsCollectionField(
   instanceId: number,
   fieldId: number,
   value: string,
+  invoiceAddContext?: InvoiceAddLogContext,
 ): Promise<void> {
   const response = await discogsFetch(
     `https://api.discogs.com/users/${config.discogsUsername}/collection/folders/${folderId}/releases/${releaseId}/instances/${instanceId}/fields/${fieldId}`,
@@ -447,6 +548,8 @@ async function setDiscogsCollectionField(
       },
       body: JSON.stringify({ value }),
     },
+    invoiceAddContext,
+    `set collection field ${fieldId}`,
   );
 
   if (!response.ok) {
@@ -454,14 +557,20 @@ async function setDiscogsCollectionField(
   }
 }
 
-async function setDiscogsDefaultConditions(releaseId: number, folderId: number, instanceId: number): Promise<void> {
-  await setDiscogsCollectionField(releaseId, folderId, instanceId, 1, DEEJAY_DEFAULT_MEDIA_CONDITION);
-  await setDiscogsCollectionField(releaseId, folderId, instanceId, 2, DEEJAY_DEFAULT_SLEEVE_CONDITION);
+async function setDiscogsDefaultConditions(
+  releaseId: number,
+  folderId: number,
+  instanceId: number,
+  invoiceAddContext?: InvoiceAddLogContext,
+): Promise<void> {
+  await setDiscogsCollectionField(releaseId, folderId, instanceId, 1, DEEJAY_DEFAULT_MEDIA_CONDITION, invoiceAddContext);
+  await setDiscogsCollectionField(releaseId, folderId, instanceId, 2, DEEJAY_DEFAULT_SLEEVE_CONDITION, invoiceAddContext);
 }
 
 async function addReleaseToDiscogsCollection(
   releaseId: number,
   folderId: number,
+  invoiceAddContext?: InvoiceAddLogContext,
 ): Promise<{
   instanceId: number | null;
   added: boolean;
@@ -469,7 +578,7 @@ async function addReleaseToDiscogsCollection(
   existingFolderId: number | null;
 }> {
   // Prevent duplicate Discogs instances: if already present in another folder, do not POST add again.
-  const existingInstances = await getDiscogsCollectionInstances(releaseId);
+  const existingInstances = await getDiscogsCollectionInstances(releaseId, invoiceAddContext);
   const targetInstance = existingInstances.find((instance) => instance.folderId === folderId);
 
   if (targetInstance) {
@@ -495,11 +604,13 @@ async function addReleaseToDiscogsCollection(
     {
       method: 'POST',
     },
+    invoiceAddContext,
+    'add release to collection folder',
   );
 
   if (!response.ok) {
     if (response.status === 409 || response.status === 422) {
-      const fallbackInstances = await getDiscogsCollectionInstances(releaseId);
+      const fallbackInstances = await getDiscogsCollectionInstances(releaseId, invoiceAddContext);
       const fallbackTargetInstance = fallbackInstances.find((instance) => instance.folderId === folderId);
       if (fallbackTargetInstance) {
         return {
@@ -515,7 +626,7 @@ async function addReleaseToDiscogsCollection(
 
   const data = await response.json().catch(() => null);
   const addedInstanceId = Number(data?.instance_id || data?.id);
-  const fallbackInstances = Number.isInteger(addedInstanceId) ? [] : await getDiscogsCollectionInstances(releaseId);
+  const fallbackInstances = Number.isInteger(addedInstanceId) ? [] : await getDiscogsCollectionInstances(releaseId, invoiceAddContext);
   const fallbackTargetInstance = fallbackInstances.find((instance) => instance.folderId === folderId);
   const instanceId = Number.isInteger(addedInstanceId) ? addedInstanceId : fallbackTargetInstance?.instanceId || null;
 
@@ -523,7 +634,7 @@ async function addReleaseToDiscogsCollection(
     throw new Error('Discogs collection add succeeded, but no instance ID was returned');
   }
 
-  await setDiscogsDefaultConditions(releaseId, folderId, instanceId);
+  await setDiscogsDefaultConditions(releaseId, folderId, instanceId, invoiceAddContext);
 
   return {
     instanceId,
@@ -536,9 +647,12 @@ async function addReleaseToDiscogsCollection(
 async function importReleaseToLocalCollection(
   releaseId: number,
   importMetadata: ImportSessionMetadata,
+  invoiceAddContext?: InvoiceAddLogContext,
 ): Promise<'added' | 'updated-local'> {
   const db = getDatabase();
-  const releaseData = await fetchDiscogsRelease(releaseId);
+  const startedAt = Date.now();
+  logInvoiceAddEvent('local_import_started', invoiceAddContext);
+  const releaseData = await fetchDiscogsRelease(releaseId, invoiceAddContext);
   const existingRelease = await db.getReleaseByDiscogsId(releaseId);
   let localReleaseId: number;
 
@@ -579,6 +693,12 @@ async function importReleaseToLocalCollection(
       import_shipping_price: importMetadata.shippingPrice,
     });
   }
+
+  logInvoiceAddEvent('local_release_upserted', invoiceAddContext, {
+    localReleaseId,
+    localStatus: existingRelease ? 'updated-local' : 'added',
+    durationMs: Date.now() - startedAt,
+  });
 
   // Always refresh relation tables from Discogs for invoice-driven syncs.
   db.getDb().prepare('DELETE FROM release_artists WHERE release_id = ?').run(localReleaseId);
@@ -643,7 +763,7 @@ async function importReleaseToLocalCollection(
   }
 
   // Fetch and persist current marketplace price for the newly added release.
-  const marketplaceStats = await fetchDiscogsMarketplaceStats(releaseId);
+  const marketplaceStats = await fetchDiscogsMarketplaceStats(releaseId, invoiceAddContext);
   const lowestPrice = marketplaceStats?.lowest_price?.value;
   const lowestPriceCurrency = marketplaceStats?.lowest_price?.currency;
   if (typeof lowestPrice === 'number' && typeof lowestPriceCurrency === 'string' && lowestPriceCurrency.length > 0) {
@@ -656,7 +776,13 @@ async function importReleaseToLocalCollection(
     });
   }
 
-  return existingRelease ? 'updated-local' : 'added';
+  const localStatus = existingRelease ? 'updated-local' : 'added';
+  logInvoiceAddEvent('local_import_completed', invoiceAddContext, {
+    localReleaseId,
+    localStatus,
+    durationMs: Date.now() - startedAt,
+  });
+  return localStatus;
 }
 
 async function addSelectedReleasesToCollection(
@@ -664,7 +790,9 @@ async function addSelectedReleasesToCollection(
   allowedReleaseIds: Set<number>,
   importMetadata: ImportSessionMetadata,
   folderById: Map<number, DiscogsCollectionFolder>,
+  importId: string,
 ) {
+  const batchStartedAt = Date.now();
   const uniqueSelections = Array.from(
     new Map(
       selections
@@ -681,11 +809,27 @@ async function addSelectedReleasesToCollection(
   let syncedFromDiscogsCount = 0;
   let invoiceMetadataUpdatedCount = 0;
 
-  for (const selection of uniqueSelections) {
+  logInvoiceAddEvent('batch_started', { importId }, {
+    selectedCount: uniqueSelections.length,
+  });
+
+  for (const [index, selection] of uniqueSelections.entries()) {
     const { releaseId, folderId } = selection;
     const folder = folderById.get(folderId);
+    const releaseStartedAt = Date.now();
 
     if (!folder) {
+      logInvoiceAddEvent('release_rejected', {
+        importId,
+        releaseId,
+        folderId,
+        itemNumber: index + 1,
+        totalItems: uniqueSelections.length,
+        invoiceItemLabel: selection.invoiceItemLabel,
+      }, {
+        durationMs: Date.now() - releaseStartedAt,
+        error: 'Selected Discogs folder does not exist',
+      });
       results.push({
         releaseId,
         folderId,
@@ -695,8 +839,23 @@ async function addSelectedReleasesToCollection(
       continue;
     }
 
+    const invoiceAddContext: InvoiceAddLogContext = {
+      importId,
+      releaseId,
+      folderId,
+      folderName: folder.name,
+      itemNumber: index + 1,
+      totalItems: uniqueSelections.length,
+      invoiceItemLabel: selection.invoiceItemLabel,
+    };
+    logInvoiceAddEvent('release_started', invoiceAddContext);
+
     try {
       if (!allowedReleaseIds.has(releaseId)) {
+        logInvoiceAddEvent('release_rejected', invoiceAddContext, {
+          durationMs: Date.now() - releaseStartedAt,
+          error: 'Release was not produced by this invoice import session',
+        });
         results.push({
           releaseId,
           folderId,
@@ -709,8 +868,18 @@ async function addSelectedReleasesToCollection(
 
       let discogsAddResult: Awaited<ReturnType<typeof addReleaseToDiscogsCollection>> | null = null;
       try {
-        discogsAddResult = await addReleaseToDiscogsCollection(releaseId, folderId);
+        discogsAddResult = await addReleaseToDiscogsCollection(releaseId, folderId, invoiceAddContext);
+        logInvoiceAddEvent('discogs_collection_completed', invoiceAddContext, {
+          added: discogsAddResult.added,
+          alreadyInDifferentFolder: discogsAddResult.alreadyInDifferentFolder,
+          existingFolderId: discogsAddResult.existingFolderId,
+          durationMs: Date.now() - releaseStartedAt,
+        });
       } catch (discogsError) {
+        logInvoiceAddEvent('discogs_collection_failed', invoiceAddContext, {
+          durationMs: Date.now() - releaseStartedAt,
+          error: discogsError instanceof Error ? discogsError.message : 'Discogs add failed',
+        });
         results.push({
           releaseId,
           folderId,
@@ -725,6 +894,10 @@ async function addSelectedReleasesToCollection(
       }
 
       if (!discogsAddResult) {
+        logInvoiceAddEvent('discogs_collection_failed', invoiceAddContext, {
+          durationMs: Date.now() - releaseStartedAt,
+          error: 'Discogs add did not return a result',
+        });
         results.push({
           releaseId,
           folderId,
@@ -740,6 +913,10 @@ async function addSelectedReleasesToCollection(
 
       if (discogsAddResult.alreadyInDifferentFolder) {
         const existingFolder = discogsAddResult.existingFolderId ? folderById.get(discogsAddResult.existingFolderId) : null;
+        logInvoiceAddEvent('release_rejected', invoiceAddContext, {
+          durationMs: Date.now() - releaseStartedAt,
+          error: `Release already exists in Discogs folder "${existingFolder?.name || discogsAddResult.existingFolderId || 'unknown'}"`,
+        });
         results.push({
           releaseId,
           folderId,
@@ -759,9 +936,13 @@ async function addSelectedReleasesToCollection(
       }
 
       try {
-        const localStatus = await importReleaseToLocalCollection(releaseId, importMetadata);
+        const localStatus = await importReleaseToLocalCollection(releaseId, importMetadata, invoiceAddContext);
         syncedFromDiscogsCount += 1;
         invoiceMetadataUpdatedCount += 1;
+        logInvoiceAddEvent('release_completed', invoiceAddContext, {
+          localStatus,
+          durationMs: Date.now() - releaseStartedAt,
+        });
         results.push({
           releaseId,
           folderId,
@@ -772,6 +953,10 @@ async function addSelectedReleasesToCollection(
           localStatus,
         });
       } catch (localError) {
+        logInvoiceAddEvent('local_import_failed', invoiceAddContext, {
+          durationMs: Date.now() - releaseStartedAt,
+          error: localError instanceof Error ? localError.message : 'Local import failed',
+        });
         results.push({
           releaseId,
           folderId,
@@ -785,6 +970,10 @@ async function addSelectedReleasesToCollection(
         continue;
       }
     } catch (error) {
+      logInvoiceAddEvent('release_failed', invoiceAddContext, {
+        durationMs: Date.now() - releaseStartedAt,
+        error: error instanceof Error ? error.message : 'Failed to add release',
+      });
       results.push({
         releaseId,
         folderId,
@@ -794,6 +983,13 @@ async function addSelectedReleasesToCollection(
       });
     }
   }
+
+  logInvoiceAddEvent('batch_completed', { importId }, {
+    selectedCount: uniqueSelections.length,
+    succeededCount: results.filter((result) => result.status === 'added' || result.status === 'already-local').length,
+    failedCount: results.filter((result) => result.status === 'error' || result.status === 'partial' || result.status === 'rejected').length,
+    durationMs: Date.now() - batchStartedAt,
+  });
 
   return {
     results,
@@ -827,6 +1023,9 @@ function parseAddSelections(
   for (const rawSelection of rawSelections) {
     const releaseId = Number(rawSelection?.releaseId);
     const folderId = Number(rawSelection?.folderId);
+    const invoiceItemLabel = typeof rawSelection?.invoiceItemLabel === 'string'
+      ? rawSelection.invoiceItemLabel.trim().slice(0, 240) || undefined
+      : undefined;
 
     if (!Number.isInteger(releaseId) || releaseId <= 0) {
       continue;
@@ -841,7 +1040,7 @@ function parseAddSelections(
     }
 
     seenReleaseIds.add(releaseId);
-    selections.push({ releaseId, folderId });
+    selections.push({ releaseId, folderId, invoiceItemLabel });
   }
 
   if (selections.length === 0) {
@@ -1057,6 +1256,7 @@ export async function POST(request: NextRequest) {
         session.releaseIds,
         session.metadata,
         folderById,
+        body.importId,
       );
       const results = addOutcome.results;
 

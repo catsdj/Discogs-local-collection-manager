@@ -74,6 +74,7 @@ interface CollectionFolder {
 interface AddSelection {
   releaseId: number;
   folderId: number;
+  invoiceItemLabel: string;
 }
 
 const confidenceClassNames: Record<InvoiceCandidate['confidence'], string> = {
@@ -130,7 +131,11 @@ export default function InvoiceImportClient() {
           return null;
         }
 
-        return { releaseId, folderId };
+        return {
+          releaseId,
+          folderId,
+          invoiceItemLabel: `${item.catalogNumber} — ${item.artist} — ${item.title}`,
+        };
       })
       .filter((selection): selection is AddSelection => selection !== null);
   }, [defaultFolderId, result, selectedCandidates, selectedFolderByItem]);
@@ -512,7 +517,9 @@ export default function InvoiceImportClient() {
               </div>
               <div className="mt-4 flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
                 <div className="text-sm text-muted-foreground">
-                  Add selected Discogs releases to the chosen Discogs folders and the local app database.
+                  {isAddingToCollection
+                    ? `Adding ${selectedCount} selected release${selectedCount === 1 ? '' : 's'} to Discogs and syncing local details. This can take a few minutes.`
+                    : 'Add selected Discogs releases to the chosen Discogs folders and the local app database.'}
                 </div>
                 <Button
                   onClick={handleAddSelectedToCollection}
@@ -528,7 +535,7 @@ export default function InvoiceImportClient() {
                   {isAddingToCollection ? (
                     <>
                       <PlusCircle className="h-4 w-4 animate-pulse" />
-                      Adding...
+                      Syncing...
                     </>
                   ) : (
                     <>
