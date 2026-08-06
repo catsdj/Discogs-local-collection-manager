@@ -31,6 +31,7 @@ export const CollectionViewToggle = memo(function CollectionViewToggle({
       <div className="flex border rounded">
         <button
           type="button"
+          data-testid="sidebar-view-mode-table"
           onClick={() => onViewModeChange('table')}
           className={`px-3 py-1 text-sm transition-colors ${
             viewMode === 'table'
@@ -42,6 +43,7 @@ export const CollectionViewToggle = memo(function CollectionViewToggle({
         </button>
         <button
           type="button"
+          data-testid="sidebar-view-mode-cards"
           onClick={() => onViewModeChange('cards')}
           className={`px-3 py-1 text-sm transition-colors ${
             viewMode === 'cards'
@@ -129,6 +131,7 @@ export const CollectionRowsPerPageDropdown = memo(function CollectionRowsPerPage
         {viewMode === 'cards' ? 'Cards per page:' : 'Rows per page:'}
       </span>
       <Select
+        data-testid="sidebar-rows-per-page-select"
         value={rowsPerPage}
         onChange={(e) => onRowsPerPageChange(parseInt(e.target.value, 10))}
         className="h-8 w-28 py-1"
@@ -250,6 +253,7 @@ const CollectionSidebar = memo(function CollectionSidebar({
                 onOpenChange={onStyleFilterOpenChange}
                 placeholder="Select styles..."
                 className="w-full"
+                testId="sidebar-style-filter"
               />
             ) : (
               <div className="text-sm text-muted-foreground">
@@ -302,6 +306,7 @@ const CollectionSidebar = memo(function CollectionSidebar({
               disabled={isSyncing || isUpdating}
             />
             <Button
+              data-testid="sidebar-get-release-data"
               onClick={onSyncCollection}
               disabled={discogsActionsDisabled || (isUpdating && !isSyncing)}
               className="w-full"
@@ -309,6 +314,7 @@ const CollectionSidebar = memo(function CollectionSidebar({
               {isSyncing ? 'Stop Refresh' : 'Refresh Details & Prices'}
             </Button>
             <Button
+              data-testid="sidebar-update-collection"
               variant="outline"
               onClick={onUpdateCollection}
               disabled={discogsActionsDisabled || (isSyncing && !isUpdating)}

@@ -628,6 +628,7 @@ export default function DiscogsCollection() {
   };
 
   const handleStyleSelectionChange = (newSelectedStyles: string[]) => {
+    selectedStylesRef.current = newSelectedStyles;
     setSelectedStyles(newSelectedStyles);
     setCurrentPage(1);
     if (!styleFilterOpen) {
@@ -1979,12 +1980,14 @@ export default function DiscogsCollection() {
               />
               <div className="flex flex-wrap gap-2">
                 <Button
+                  data-testid="mobile-get-release-data"
                   onClick={handleSyncCollection}
                   disabled={discogsActionsDisabled || (isUpdating && !isSyncing)}
                 >
                   {isSyncing ? 'Stop Refresh' : 'Refresh Details & Prices'}
                 </Button>
                 <Button
+                  data-testid="mobile-update-collection"
                   variant="outline"
                   onClick={handleUpdateCollection}
                   disabled={discogsActionsDisabled || (isSyncing && !isUpdating)}
@@ -2068,7 +2071,7 @@ export default function DiscogsCollection() {
                       const isSorted = sortColumn !== 'date_added' || sortDirection !== 'desc';
                       
                       return (
-                        <div className="text-sm text-muted-foreground">
+                        <div className="text-sm text-muted-foreground" data-testid="collection-result-summary">
                           {hasActiveFilters ? (
                             <span>
                               Showing {data?.releases?.length || 0} of {data?.totalFiltered || 0} releases 
@@ -2109,7 +2112,7 @@ export default function DiscogsCollection() {
                       {viewMode === 'table' ? (
                         <div className="border rounded-lg overflow-hidden">
                           <div className="overflow-x-auto">
-                            <Table className="table-auto w-full">
+                            <Table className="table-auto w-full" data-testid="collection-table">
                         <TableHeader className="sticky top-0 bg-background z-20 border-b">
                           <TableRow>
                             <TableHead className="whitespace-nowrap bg-background border-b">
@@ -2376,6 +2379,7 @@ export default function DiscogsCollection() {
                           {(data?.releases || []).map((release) => (
                             <TableRow 
                               key={release.id} 
+                              data-testid={`release-row-${release.basic_information.id}`}
                               data-release-id={release.basic_information.id}
                               className="transition-all duration-300"
                             >

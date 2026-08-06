@@ -15,7 +15,10 @@ export default function SetupRequiredCard({ setup }: { setup: SetupInfo }) {
   }
 
   return (
-    <Card className="border-amber-300 bg-amber-50/80 dark:border-amber-700 dark:bg-amber-950/30">
+    <Card
+      data-testid="setup-required-card"
+      className="border-amber-300 bg-amber-50/80 dark:border-amber-700 dark:bg-amber-950/30"
+    >
       <CardHeader className="pb-3">
         <CardTitle className="text-lg text-amber-950 dark:text-amber-100">
           Setup required before syncing
@@ -35,6 +38,7 @@ export default function SetupRequiredCard({ setup }: { setup: SetupInfo }) {
         <div className="flex flex-wrap gap-2">
           <Button asChild variant="default" size="sm">
             <a
+              data-testid="setup-get-token-link"
               href="https://www.discogs.com/settings/developers"
               target="_blank"
               rel="noopener noreferrer"

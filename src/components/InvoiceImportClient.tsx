@@ -459,10 +459,15 @@ export default function InvoiceImportClient() {
             <input
               type="file"
               accept="application/pdf,.pdf"
+              data-testid="invoice-file-input"
               onChange={handleFileChange}
               className="w-full rounded-md border bg-background px-3 py-2 text-sm sm:max-w-md"
             />
-            <Button onClick={handleImport} disabled={!file || isImporting || isMatching || setupStatus?.configured === false}>
+            <Button
+              data-testid="invoice-import-button"
+              onClick={handleImport}
+              disabled={!file || isImporting || isMatching || setupStatus?.configured === false}
+            >
               {isImporting ? (
                 <>
                   <Search className="h-4 w-4 animate-pulse" />
@@ -522,6 +527,7 @@ export default function InvoiceImportClient() {
                     : 'Add selected Discogs releases to the chosen Discogs folders and the local app database.'}
                 </div>
                 <Button
+                  data-testid="invoice-add-selected-button"
                   onClick={handleAddSelectedToCollection}
                   disabled={
                     selectedCount === 0 ||
@@ -684,6 +690,7 @@ export default function InvoiceImportClient() {
                               id={inputId}
                               type="radio"
                               name={`item-${item.id}`}
+                              data-testid={`invoice-candidate-${item.id}-${candidate.id}`}
                               checked={selected}
                               onChange={() => setCandidateSelection(item.id, candidate.id)}
                               className="mt-2"
@@ -750,6 +757,7 @@ export default function InvoiceImportClient() {
                         Row {itemIndex + 1} has a selected release for the next add-to-collection step.
                       </div>
                       <Select
+                        data-testid={`invoice-folder-${item.id}`}
                         value={String(getSelectedFolderId(item.id) || '')}
                         onChange={(event) => {
                           const folderId = Number(event.target.value);
