@@ -100,7 +100,7 @@ export const CollectionSyncPeriodSelect = memo(function CollectionSyncPeriodSele
         value={value}
         onChange={(event) => onChange(event.target.value as CollectionSyncPeriod)}
         disabled={disabled}
-        className="h-8 w-32 py-1"
+        className="h-8 w-28 py-1"
       >
         {COLLECTION_SYNC_PERIOD_OPTIONS.map((option) => (
           <option key={option.value} value={option.value}>
@@ -171,7 +171,7 @@ export const CollectionCardSortingControls = memo(function CollectionCardSorting
         id="card-sort"
         value={sortColumn}
         onChange={(event) => onSort(event.target.value)}
-        className="h-8 w-44 py-1"
+        className="h-8 w-32 py-1"
       >
         {sortOptions.map((option) => (
           <option key={option.value} value={option.value}>

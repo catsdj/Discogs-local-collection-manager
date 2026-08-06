@@ -1006,7 +1006,7 @@ function parseAddSelections(
   const rawSelections = Array.isArray(body.selections)
     ? body.selections
     : Array.isArray(body.releaseIds)
-      ? body.releaseIds.map((releaseId) => ({ releaseId, folderId: defaultFolderId }))
+      ? body.releaseIds.map((releaseId) => ({ releaseId, folderId: defaultFolderId, invoiceItemLabel: undefined }))
       : null;
 
   if (!rawSelections) {

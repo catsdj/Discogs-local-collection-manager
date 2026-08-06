@@ -30,6 +30,7 @@ function PlaylistReleaseCard({
 }) {
   return (
     <div
+      data-testid={`playlist-release-${release.id}`}
       draggable
       onDragStart={(event) => {
         event.dataTransfer.effectAllowed = 'move';
@@ -214,6 +215,7 @@ export default function PlaylistsClient() {
                     <label htmlFor="playlist-name" className="text-sm font-medium">Name</label>
                     <input
                       id="playlist-name"
+                      data-testid="playlist-name-input"
                       value={name}
                       onChange={(event) => setName(event.target.value)}
                       className="h-9 w-full rounded-md border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -224,13 +226,14 @@ export default function PlaylistsClient() {
                     <label htmlFor="playlist-description" className="text-sm font-medium">Notes</label>
                     <textarea
                       id="playlist-description"
+                      data-testid="playlist-description-input"
                       value={description}
                       onChange={(event) => setDescription(event.target.value)}
                       className="min-h-20 w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       placeholder="Optional"
                     />
                   </div>
-                  <Button type="submit" className="w-full">
+                  <Button type="submit" className="w-full" data-testid="playlist-create-button">
                     <Plus className="h-4 w-4" />
                     Create Playlist
                   </Button>
@@ -243,6 +246,7 @@ export default function PlaylistsClient() {
                 playlists.map((playlist) => (
                   <div
                     key={playlist.id}
+                    data-testid={`playlist-card-${playlist.id}`}
                     className={`rounded-lg border p-3 ${
                       selectedPlaylist?.id === playlist.id ? 'border-blue-300 bg-blue-50' : 'bg-white'
                     }`}
@@ -279,7 +283,7 @@ export default function PlaylistsClient() {
               <CardTitle className="flex flex-wrap items-center justify-between gap-3">
                 <span className="flex min-w-0 items-center gap-2">
                   <ListMusic className="h-5 w-5" />
-                  <span className="truncate">{selectedPlaylist?.name || 'No playlist selected'}</span>
+                  <span className="truncate" data-testid="selected-playlist-title">{selectedPlaylist?.name || 'No playlist selected'}</span>
                 </span>
                 {selectedPlaylist && (
                   <span className="flex items-center gap-1 text-sm font-normal text-muted-foreground">

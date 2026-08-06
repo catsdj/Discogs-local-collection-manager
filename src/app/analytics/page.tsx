@@ -291,6 +291,7 @@ export default function AnalyticsPage() {
               </label>
               <select
                 id="year-select"
+                data-testid="analytics-year-select"
                 value={selectedYear}
                 onChange={(e) => setSelectedYear(parseInt(e.target.value))}
                 className="px-3 py-2 border rounded-md bg-background"
@@ -302,7 +303,7 @@ export default function AnalyticsPage() {
                 ))}
               </select>
               {yearData && (
-                <div className="text-sm text-muted-foreground">
+                <div className="text-sm text-muted-foreground" data-testid="analytics-year-summary">
                   {yearData.totalReleases} releases • {
                     Array.from(yearData.totalValuesByCurrency.entries())
                       .sort((a, b) => b[1] - a[1])

@@ -161,6 +161,7 @@ export function StyleFilter({
           onSelectionChange={onChange}
           placeholder="Select styles to filter..."
           className="w-full"
+          testId="column-style-filter"
         />
         <div className="flex gap-2">
           <Button size="sm" onClick={onApply} className="flex-1">
