@@ -44,7 +44,7 @@ This is WIP. Bugs and inconsistencies may be present :)
 
 ### Playlists and media workflows
 
-- Playlist management integrated with collection releases and stored in local SQLite
+- Playlist management integrated with collection releases
 - Release-level playlist controls
 - YouTube and Discogs video handling in release displays
 
@@ -72,7 +72,7 @@ This repository is not yet a packaged desktop application. To run it, install th
 
 ### Prerequisites
 
-- **Node.js 20.9 or later** (use the current LTS installer from [nodejs.org](https://nodejs.org/)). Node.js installs **npm** automatically.
+- **Node.js 26 or later** (Current release from [nodejs.org](https://nodejs.org/), or use `nvm install 26`). Node.js installs **npm** automatically. Node.js 24 LTS also works.
 - **Git**, only if you plan to clone the repository rather than download its source archive.
 
 Open a terminal and confirm that Node.js and npm are available:
@@ -158,25 +158,29 @@ npm run db:init
 
 Then set these values in `.env.local`:
 
-| Variable | Required | Purpose |
-| --- | --- | --- |
-| `DISCOGS_API_TOKEN` | Yes, for sync | Personal access token from Discogs |
-| `DISCOGS_USERNAME` | Yes, for sync | Your Discogs username |
-| `NEXT_PUBLIC_APP_URL` | No | App base URL (defaults to `http://localhost:3000`) |
-| `ADMIN_TOKEN` | No | Protects `/api/performance` in non-dev deployments |
 
-See [`env.example`](env.example) for the full template and comments.
+| Variable              | Required      | Purpose                                            |
+| --------------------- | ------------- | -------------------------------------------------- |
+| `DISCOGS_API_TOKEN`   | Yes, for sync | Personal access token from Discogs                 |
+| `DISCOGS_USERNAME`    | Yes, for sync | Your Discogs username                              |
+| `NEXT_PUBLIC_APP_URL` | No            | App base URL (defaults to `http://localhost:3000`) |
+| `ADMIN_TOKEN`         | No            | Protects `/api/performance` in non-dev deployments |
+
+
+See `[env.example](env.example)` for the full template and comments.
 
 ### What works without credentials?
 
 The app **starts without** `.env.local`. You are not blocked at install time.
 
-| With credentials | Without credentials |
-| --- | --- |
-| Browse your local SQLite collection | Browse your local SQLite collection (if already synced) |
-| Import new releases and condition changes from Discogs | Setup guidance shown in the UI |
-| Refresh release details, prices, videos, and tracklists | Sync buttons disabled |
-| Invoice import against Discogs | Invoice import blocked until configured |
+
+| With credentials                                        | Without credentials                                     |
+| ------------------------------------------------------- | ------------------------------------------------------- |
+| Browse your local SQLite collection                     | Browse your local SQLite collection (if already synced) |
+| Import new releases and condition changes from Discogs  | Setup guidance shown in the UI                          |
+| Refresh release details, prices, videos, and tracklists | Sync buttons disabled                                   |
+| Invoice import against Discogs                          | Invoice import blocked until configured                 |
+
 
 If credentials are missing, the UI shows a setup card with steps. API routes that talk to Discogs return a structured `SETUP_REQUIRED` response instead of crashing the server.
 
@@ -192,7 +196,7 @@ If something still fails, check the terminal for warnings about missing `DISCOGS
 
 The interactive setup wizard is for a person running the app locally. Do **not** run `npm run setup` in CI, Docker, or another unattended deployment. Set `DISCOGS_API_TOKEN`, `DISCOGS_USERNAME`, `NEXT_PUBLIC_APP_URL`, and (for non-development deployments) `ADMIN_TOKEN` through the host's secret/environment-variable mechanism instead.
 
-The application stores its collection and playlists in `data/discogs_collection.db`. In production, that directory must be on persistent, writable storage and backed up; an ephemeral filesystem will lose the collection and playlists on redeploy. Run a single application replica against each SQLite database file.
+The application stores its collection in `data/discogs_collection.db`. In production, that directory must be on persistent, writable storage and backed up; an ephemeral filesystem will lose the collection on redeploy. Run a single application replica against each SQLite database file.
 
 Database schema migrations run automatically and are recorded locally in the `schema_migrations` table when the app first opens the database. They are safe to run on every startup and do not reset collection or sync state.
 
@@ -205,27 +209,20 @@ Database schema migrations run automatically and are recorded locally in the `sc
 ## Scripts
 
 
-| Command                  | Description                             |
-| ------------------------ | --------------------------------------- |
-| `npm run dev`            | Start development server                |
-| `npm run build`          | Build production artifacts              |
-| `npm run start`          | Run production server                   |
-| `npm run lint`           | Run ESLint                              |
+| Command                  | Description                                          |
+| ------------------------ | ---------------------------------------------------- |
+| `npm run dev`            | Start development server                             |
+| `npm run build`          | Build production artifacts                           |
+| `npm run start`          | Run production server                                |
+| `npm run lint`           | Run ESLint                                           |
 | `npm run setup`          | Interactive `.env.local` setup and local DB creation |
 | `npm run db:init`        | Create `data/` and the SQLite database file only     |
-| `npm run db:status` | Report local sync status |
-| `npm run db:explore` | Inspect the local database (read-only) |
-| `npm run db:flagged` | Report releases flagged as unavailable |
-| `npm run db:no-listings` | Report releases without marketplace listings |
-| `npm run db:recheck-flagged` | Re-enable eligible price checks (changes the local DB) |
-| `npm run verify:security` | Run contributor security checks |
-| `npm run verify:performance` | Run contributor performance checks |
-| `npm run security:audit` | Run production dependency audit         |
-| `npm run security:fix`   | Apply production dependency audit fixes |
-| `npm run security:check` | Check outdated packages and audit       |
+| `npm run security:audit` | Run production dependency audit                      |
+| `npm run security:fix`   | Apply production dependency audit fixes              |
+| `npm run security:check` | Check outdated packages and audit                    |
 
-The `tools/` directory contains optional manual administration and developer-verification utilities. They are not called by `npm run start` and should not be included in a production deployment artifact. The `db:*` commands access the local SQLite file directly, so never expose them through an HTTP route or run the write-capable command on an unverified copy of the database.
 
+The `tools/` directory contains optional manual administration and developer-verification utilities. They are not called by `npm run start` and should not be included in a production deployment artifact.
 
 ## Tech stack
 
@@ -237,7 +234,7 @@ The `tools/` directory contains optional manual administration and developer-ver
 
 ## Release notes
 
-See [`CHANGELOG.md`](CHANGELOG.md) for release history and unreleased changes.
+See `[CHANGELOG.md](CHANGELOG.md)` for release history and unreleased changes.
 
 ## Discogs API compliance notes
 
@@ -252,4 +249,4 @@ See [`CHANGELOG.md`](CHANGELOG.md) for release history and unreleased changes.
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE).
+MIT — see `[LICENSE](LICENSE)`.
