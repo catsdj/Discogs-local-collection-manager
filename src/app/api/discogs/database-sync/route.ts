@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDatabaseSyncService } from '@/lib/databaseSyncService';
+import { parseCollectionSyncPeriod } from '@/lib/collectionSyncPeriod';
 import { rejectIfNotLocal } from '@/lib/requestSecurity';
 import { rejectIfNotConfigured } from '@/lib/setup';
 
@@ -12,7 +13,6 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const action = searchParams.get('action');
-
     const syncService = getDatabaseSyncService();
 
     if (action === 'status') {
@@ -30,11 +30,16 @@ export async function GET(request: NextRequest) {
         return setupResponse;
       }
 
-      // Trigger manual sync
-      syncService.runSyncJob();
+      const periodValue = searchParams.get('period');
+      const period = parseCollectionSyncPeriod(periodValue);
+      if (periodValue !== null && !period) {
+        return NextResponse.json({ error: 'Invalid sync period' }, { status: 400 });
+      }
+
+      void syncService.runSyncJob(period ?? 'all');
       return NextResponse.json({
         message: 'Sync job triggered',
-        status: 'running'
+        job: syncService.getJobStatus(),
       });
     }
 
@@ -63,8 +68,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { action } = body;
-
+    const { action, period: periodValue } = body;
     const syncService = getDatabaseSyncService();
 
     if (action === 'trigger') {
@@ -73,11 +77,24 @@ export async function POST(request: NextRequest) {
         return setupResponse;
       }
 
+      const period = parseCollectionSyncPeriod(periodValue);
+      if (periodValue !== undefined && !period) {
+        return NextResponse.json({ error: 'Invalid sync period' }, { status: 400 });
+      }
+
       // Trigger manual sync
-      syncService.runSyncJob();
+      void syncService.runSyncJob(period ?? 'all');
       return NextResponse.json({
         message: 'Sync job triggered successfully',
-        status: 'running'
+        job: syncService.getJobStatus(),
+      });
+    }
+
+    if (action === 'stop') {
+      const stopped = syncService.requestStop();
+      return NextResponse.json({
+        message: stopped ? 'Sync stop requested' : 'No sync job is running',
+        job: syncService.getJobStatus(),
       });
     }
 

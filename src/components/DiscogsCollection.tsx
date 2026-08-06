@@ -25,10 +25,18 @@ import { toast } from 'sonner';
 import { usePlaylists } from '@/hooks/usePlaylists';
 import SetupRequiredCard from '@/components/SetupRequiredCard';
 import CollectionSidebar, {
+  COLLECTION_PAGE_SIZES,
+  CollectionActionNotes,
   CollectionCardSortingControls,
   CollectionRowsPerPageDropdown,
+  CollectionSyncPeriodSelect,
   CollectionViewToggle,
 } from '@/components/CollectionSidebar';
+import {
+  CollectionSyncPeriod,
+  getCollectionSyncPeriodLabel,
+  parseCollectionSyncPeriod,
+} from '@/lib/collectionSyncPeriod';
 
 const SETUP_REQUIRED_CODE = 'SETUP_REQUIRED';
 
@@ -39,6 +47,23 @@ type SetupInfo = {
   steps: string[];
   quickSetup: string;
 };
+
+type DiscogsOperationJob = {
+  status: 'idle' | 'running' | 'completed' | 'failed' | 'stopped';
+  period?: CollectionSyncPeriod;
+  progress?: number;
+  total?: number;
+  processed?: number;
+  error?: string | null;
+  results?: {
+    releasesUpdated?: number;
+    newReleases?: number;
+    conditionsUpdated?: number;
+    errors?: number;
+  };
+};
+
+const idleDiscogsOperation: DiscogsOperationJob = { status: 'idle' };
 
 async function readJsonResponse(response: Response) {
   const contentType = response.headers.get('content-type') ?? '';
@@ -141,8 +166,10 @@ export default function DiscogsCollection() {
     toggleReleaseInPlaylist,
   } = usePlaylists();
   const [isCollectionLoading, setIsCollectionLoading] = useState(false);
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [isUpdating, setIsUpdating] = useState(false);
+  const [syncOperation, setSyncOperation] = useState<DiscogsOperationJob>(idleDiscogsOperation);
+  const [updateOperation, setUpdateOperation] = useState<DiscogsOperationJob>(idleDiscogsOperation);
+  const [syncPeriod, setSyncPeriod] = useState<CollectionSyncPeriod>('all');
+  const operationRefreshPendingRef = useRef({ sync: false, update: false });
   const [data, setData] = useState<CollectionData | null>(null);
   const [styleFilterOpen, setStyleFilterOpen] = useState(false);
   const [selectedStyles, setSelectedStyles] = useState<string[]>([]);
@@ -158,9 +185,11 @@ export default function DiscogsCollection() {
     remainingRequests: 60, 
     queueLength: 0 
   });
-  const [rowsPerPage, setRowsPerPage] = useState(25);
+  const [rowsPerPage, setRowsPerPage] = useState(COLLECTION_PAGE_SIZES[1]);
   const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
   const [hasLoadedViewPreferences, setHasLoadedViewPreferences] = useState(false);
+  const isSyncing = syncOperation.status === 'running';
+  const isUpdating = updateOperation.status === 'running';
   
   // Job state
   const [jobStatus, setJobStatus] = useState<{
@@ -387,7 +416,7 @@ export default function DiscogsCollection() {
   // Function to handle column header click for sorting
   const handleSort = (column: string) => {
     const newSortColumn = column;
-    let newSortDirection: 'asc' | 'desc' = 'asc';
+    let newSortDirection = sortDirection;
     
     if (sortColumn === column) {
       newSortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
@@ -623,35 +652,44 @@ export default function DiscogsCollection() {
     fetchCollection(selectedStyles, page, includeDetails);
   };
 
-  // Smart sync collection - checks if sync is needed before syncing
   const handleUpdateCollection = async () => {
     if (setupStatus && !setupStatus.configured) {
       toast.error('Configure Discogs API credentials in .env.local first');
       return;
     }
 
-    setIsUpdating(true);
     try {
+      const action = isUpdating ? 'stop' : 'trigger';
       const response = await fetch('/api/discogs/update-collection', {
         method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ action, period: syncPeriod }),
       });
 
       const result = await readJsonResponse(response);
 
-      if (response.ok) {
-        toast.success(`Collection updated: ${result.newReleases || 0} new releases, ${result.conditionsUpdated || 0} conditions updated`);
-        await fetchCollection(selectedStyles, currentPage, includeDetails);
-      } else if (result.code === SETUP_REQUIRED_CODE && result.setup) {
+      if (result.code === SETUP_REQUIRED_CODE && result.setup) {
         setSetupStatus(result.setup);
         toast.error(result.message || 'Discogs API credentials are not configured');
+      } else if (!response.ok || result.error) {
+        toast.error(`Collection import failed: ${result.message || result.error || 'Unknown error'}`);
+      } else if (result.job) {
+        setUpdateOperation(result.job);
+        if (action === 'stop') {
+          toast.info('Collection import stop requested.');
+        } else {
+          operationRefreshPendingRef.current.update = true;
+          const scope = syncPeriod === 'all' ? 'all time' : getCollectionSyncPeriodLabel(syncPeriod).toLowerCase();
+          toast.success(`Collection import started for releases added within ${scope}.`);
+        }
       } else {
-        toast.error(`Update failed: ${result.message || result.error || 'Unknown error'}`);
+        toast.error('Collection import did not return a job status.');
       }
     } catch (error) {
       console.error('Error updating collection:', error);
-      toast.error('Failed to update collection');
-    } finally {
-      setIsUpdating(false);
+      toast.error('Failed to import collection changes');
     }
   };
 
@@ -661,78 +699,54 @@ export default function DiscogsCollection() {
       return;
     }
 
-    setIsSyncing(true);
     setError(null);
-    
+
     try {
-      toast.info('Checking collection status...');
-      
-      const statusResponse = await fetch('/api/discogs/database-sync?action=status');
-      await readJsonResponse(statusResponse);
-      
+      const action = isSyncing ? 'stop' : 'trigger';
       const response = await fetch('/api/discogs/database-sync', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ action: 'trigger' }),
+        body: JSON.stringify({ action, period: syncPeriod }),
       });
 
       const result = await readJsonResponse(response);
-      
+
       if (result.code === SETUP_REQUIRED_CODE && result.setup) {
         setSetupStatus(result.setup);
         toast.error(result.message || 'Discogs API credentials are not configured');
         return;
       }
 
-      if (result.error) {
-        toast.error('Sync failed: ' + result.error);
+      if (!response.ok || result.error) {
+        toast.error('Release-detail refresh failed: ' + (result.message || result.error || 'Unknown error'));
         setError(result.error);
         return;
       }
 
-      toast.success('Collection sync started!');
-      
-      // Poll for completion
-      let attempts = 0;
-      const maxAttempts = 60; // 2 minutes max
-      let syncComplete = false;
-      
-      while (attempts < maxAttempts && !syncComplete) {
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        
-        const checkResponse = await fetch('/api/discogs/database-sync?action=status');
-        const checkResult = await checkResponse.json();
-        
-        if (checkResult.job?.status === 'completed') {
-          syncComplete = true;
-          
-          // Check if any new releases were added
-          if (checkResult.job?.results?.releasesUpdated > 0) {
-            toast.success(`Collection synced! ${checkResult.job.results.releasesUpdated} releases updated.`);
-          } else {
-            toast.info('Collection is already in sync!');
-          }
-          break;
-        } else if (checkResult.job?.status === 'failed') {
-          toast.error('Sync failed: ' + (checkResult.job?.error || 'Unknown error'));
-          break;
+      if (result.job) {
+        setSyncOperation(result.job);
+        if (action === 'stop') {
+          toast.info('Release-detail refresh stop requested.');
+        } else {
+          operationRefreshPendingRef.current.sync = true;
+          const scope = syncPeriod === 'all' ? 'all time' : getCollectionSyncPeriodLabel(syncPeriod).toLowerCase();
+          toast.success(`Release-detail refresh started for releases added within ${scope}.`);
         }
-        
-        attempts++;
+      } else {
+        toast.error('Release-detail refresh did not return a job status.');
       }
-      
-      // Fetch the updated collection
-      await fetchCollection(selectedStyles, 1, includeDetails);
-      
     } catch (error) {
       console.error('Error syncing collection:', error);
-      toast.error('Failed to sync collection');
-      setError('Failed to sync collection');
-    } finally {
-      setIsSyncing(false);
+      toast.error('Failed to refresh release details');
+      setError('Failed to refresh release details');
     }
+  };
+
+  const handleSyncPeriodChange = (period: CollectionSyncPeriod) => {
+    setSyncPeriod(period);
+    localStorage.setItem('collectionSyncPeriod', period);
   };
 
 
@@ -1570,7 +1584,7 @@ export default function DiscogsCollection() {
     );
   };
 
-  // Handle view mode change with automatic page size adjustment
+  // Keep the selected page size when switching views; both views use the same options.
   const handleViewModeChange = (newViewMode: 'table' | 'cards') => {
     setViewMode(newViewMode);
     
@@ -1579,30 +1593,16 @@ export default function DiscogsCollection() {
       localStorage.setItem('collectionViewMode', newViewMode);
     }
     
-    let newRowsPerPage = rowsPerPage;
     let nextSortColumn = sortColumn;
     let nextSortDirection = sortDirection;
     
-    // Auto-adjust page size when switching views
     if (newViewMode === 'cards') {
-      // Switch to card-appropriate page sizes
-      if (rowsPerPage === 25) newRowsPerPage = 24;
-      else if (rowsPerPage === 50) newRowsPerPage = 32;
-      else if (rowsPerPage === 75) newRowsPerPage = 48;
-      else if (rowsPerPage === 100) newRowsPerPage = 48;
-      else if (rowsPerPage === 10) newRowsPerPage = 16;
       // Set default sorting for card view: date added, descending
       nextSortColumn = 'date_added';
       nextSortDirection = 'desc';
       setSortColumn(nextSortColumn);
       setSortDirection(nextSortDirection);
     } else {
-      // Switch to table-appropriate page sizes
-      if (rowsPerPage === 8) newRowsPerPage = 10;
-      else if (rowsPerPage === 16) newRowsPerPage = 25;
-      else if (rowsPerPage === 24) newRowsPerPage = 25;
-      else if (rowsPerPage === 32) newRowsPerPage = 50;
-      else if (rowsPerPage === 48) newRowsPerPage = 75;
       // Set default sorting for table view: title, ascending
       nextSortColumn = 'title';
       nextSortDirection = 'asc';
@@ -1610,12 +1610,11 @@ export default function DiscogsCollection() {
       setSortDirection(nextSortDirection);
     }
     
-    // Update the page size and reset to first page
-    setRowsPerPage(newRowsPerPage);
+    // Reset to the first page while preserving the selected page size.
     setCurrentPage(1);
     
     // Fetch data with new view mode and page size
-    fetchCollection(selectedStyles, 1, includeDetails, newRowsPerPage, undefined, {
+    fetchCollection(selectedStyles, 1, includeDetails, rowsPerPage, undefined, {
       sortColumn: nextSortColumn,
       sortDirection: nextSortDirection,
     });
@@ -1679,10 +1678,8 @@ export default function DiscogsCollection() {
     const savedViewMode = localStorage.getItem('collectionViewMode');
     if (savedViewMode === 'cards') {
       setViewMode('cards');
-      setRowsPerPage(16);
     } else if (savedViewMode === 'table') {
       setViewMode('table');
-      setRowsPerPage(25);
     }
 
     setHasLoadedViewPreferences(true);
@@ -1720,28 +1717,110 @@ export default function DiscogsCollection() {
     loadAllStyles();
   }, [hasLoadedViewPreferences]);
 
-  // Auto-adjust page size when view mode changes (only for invalid options)
   useEffect(() => {
-    if (!hasLoadedViewPreferences) return;
-
-    if (viewMode === 'cards') {
-      // If current page size is not a valid card option, set to default
-      const validCardOptions = [8, 16, 24, 32, 48];
-      if (!validCardOptions.includes(rowsPerPage)) {
-        const defaultCardsPerPage = 16;
-        setRowsPerPage(defaultCardsPerPage);
-        fetchCollection(selectedStyles, 1, includeDetails, defaultCardsPerPage);
-      }
-    } else {
-      // If current page size is not a valid table option, set to default
-      const validTableOptions = [10, 25, 50, 75, 100];
-      if (!validTableOptions.includes(rowsPerPage)) {
-        const defaultRowsPerPage = 25;
-        setRowsPerPage(defaultRowsPerPage);
-        fetchCollection(selectedStyles, 1, includeDetails, defaultRowsPerPage);
-      }
+    const savedPeriod = parseCollectionSyncPeriod(localStorage.getItem('collectionSyncPeriod'));
+    if (savedPeriod) {
+      setSyncPeriod(savedPeriod);
     }
-  }, [viewMode, hasLoadedViewPreferences]);
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+
+    const refreshAfterOperation = () => {
+      void fetchCollection(selectedStylesRef.current, 1, includeDetails);
+    };
+
+    const handleSyncCompletion = (job: DiscogsOperationJob) => {
+      if (!operationRefreshPendingRef.current.sync || job.status === 'running' || job.status === 'idle') {
+        return;
+      }
+
+      operationRefreshPendingRef.current.sync = false;
+      if (job.status === 'completed') {
+        const updated = job.results?.releasesUpdated || 0;
+        if (updated > 0) {
+          toast.success(`Release details refreshed for ${updated} releases.`);
+        } else {
+          toast.info('Release details and prices are already up to date.');
+        }
+      } else if (job.status === 'stopped') {
+        toast.info('Release-detail refresh stopped.');
+      } else {
+        toast.error(`Release-detail refresh failed: ${job.error || 'Unknown error'}`);
+      }
+      refreshAfterOperation();
+    };
+
+    const handleUpdateCompletion = (job: DiscogsOperationJob) => {
+      if (!operationRefreshPendingRef.current.update || job.status === 'running' || job.status === 'idle') {
+        return;
+      }
+
+      operationRefreshPendingRef.current.update = false;
+      if (job.status === 'completed') {
+        toast.success(
+          `Collection imported: ${job.results?.newReleases || 0} new releases, ${job.results?.conditionsUpdated || 0} conditions updated.`,
+        );
+      } else if (job.status === 'stopped') {
+        toast.info('Collection import stopped.');
+      } else {
+        toast.error(`Collection import failed: ${job.error || 'Unknown error'}`);
+      }
+      refreshAfterOperation();
+    };
+
+    const pollOperations = async () => {
+      try {
+        const [syncResponse, updateResponse] = await Promise.all([
+          fetch('/api/discogs/database-sync?action=status'),
+          fetch('/api/discogs/update-collection?action=status'),
+        ]);
+        const [syncResult, updateResult] = await Promise.all([
+          readJsonResponse(syncResponse),
+          readJsonResponse(updateResponse),
+        ]);
+
+        if (disposed) {
+          return;
+        }
+
+        if (syncResult.job) {
+          const job = syncResult.job as DiscogsOperationJob;
+          setSyncOperation(job);
+          if (job.status === 'running' && job.period) {
+            setSyncPeriod(job.period);
+            localStorage.setItem('collectionSyncPeriod', job.period);
+          }
+          handleSyncCompletion(job);
+        }
+
+        if (updateResult.job) {
+          const job = updateResult.job as DiscogsOperationJob;
+          setUpdateOperation(job);
+          if (job.status === 'running' && job.period) {
+            setSyncPeriod(job.period);
+            localStorage.setItem('collectionSyncPeriod', job.period);
+          }
+          handleUpdateCompletion(job);
+        }
+      } catch (pollError) {
+        if (!disposed) {
+          console.error('Error polling Discogs operation status:', pollError);
+        }
+      }
+    };
+
+    void pollOperations();
+    const intervalId = window.setInterval(() => {
+      void pollOperations();
+    }, 2000);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(intervalId);
+    };
+  }, [includeDetails]);
 
   // Check for legacy browser cache on component mount
   useEffect(() => {
@@ -1830,8 +1909,7 @@ export default function DiscogsCollection() {
   // Note: Pagination reset is now handled server-side when filters/sorting change
 
 
-  const discogsActionsDisabled =
-    isCollectionLoading || isSyncing || isUpdating || setupStatus?.configured === false;
+  const discogsActionsDisabled = setupStatus?.configured === false;
 
   return (
     <div className="w-full">
@@ -1857,13 +1935,8 @@ export default function DiscogsCollection() {
           discogsActionsDisabled={discogsActionsDisabled}
           onSyncCollection={handleSyncCollection}
           onUpdateCollection={handleUpdateCollection}
-          viewMode={viewMode}
-          onViewModeChange={handleViewModeChange}
-          rowsPerPage={rowsPerPage}
-          onRowsPerPageChange={handleRowsPerPageChange}
-          sortColumn={sortColumn}
-          sortDirection={sortDirection}
-          onSort={handleSort}
+          syncPeriod={syncPeriod}
+          onSyncPeriodChange={handleSyncPeriodChange}
           allAvailableStyles={allAvailableStyles}
           selectedStyles={selectedStyles}
           onStyleSelectionChange={handleStyleSelectionChange}
@@ -1891,20 +1964,29 @@ export default function DiscogsCollection() {
       </CardHeader>
       <CardContent className="px-4 sm:px-6">
         <div className="space-y-4">
-            <div className="flex flex-wrap gap-2 lg:hidden">
-          <Button
-                onClick={handleSyncCollection}
-            disabled={discogsActionsDisabled}
-          >
-            {isSyncing ? 'Fetching...' : 'Get Release Data'}
-          </Button>
-          <Button
-            variant="outline"
-            onClick={handleUpdateCollection}
-            disabled={discogsActionsDisabled}
-          >
-            {isUpdating ? 'Updating...' : 'Update Collection'}
-          </Button>
+            <div className="space-y-3 lg:hidden">
+              <CollectionSyncPeriodSelect
+                id="collection-sync-period-mobile"
+                value={syncPeriod}
+                onChange={handleSyncPeriodChange}
+                disabled={isSyncing || isUpdating}
+              />
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  onClick={handleSyncCollection}
+                  disabled={discogsActionsDisabled || (isUpdating && !isSyncing)}
+                >
+                  {isSyncing ? 'Stop Refresh' : 'Refresh Details & Prices'}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={handleUpdateCollection}
+                  disabled={discogsActionsDisabled || (isSyncing && !isUpdating)}
+                >
+                  {isUpdating ? 'Stop Import' : 'Import Releases & Conditions'}
+                </Button>
+              </div>
+              <CollectionActionNotes />
                 {/* Database info instead of browser cache */}
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <span>💾 Database: {data?.pagination?.items || 0} releases synced</span>
@@ -1944,16 +2026,6 @@ export default function DiscogsCollection() {
 
           {data && (
               <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <p className="text-sm text-muted-foreground">
-                    Showing {data.releases.length} releases (filtered: {data.totalFiltered}, total: {data.totalCollection})
-                  </p>
-                  <p className="text-sm text-muted-foreground">
-                    Page {data.pagination.page} of {data.pagination.pages}
-                  </p>
-                </div>
-
-
                 {/* Original Style Filter (keeping for backward compatibility) */}
                 <div className="space-y-2 lg:hidden">
                   <h3 className="text-sm font-medium">
@@ -1996,13 +2068,11 @@ export default function DiscogsCollection() {
                               Showing {data?.releases?.length || 0} of {data?.totalFiltered || 0} releases 
                               (filtered from {data?.totalCollection || 0} total)
                               {isSorted && ` • Sorted by ${sortColumn} ${sortDirection === 'asc' ? '↑' : '↓'}`}
-                              {(data?.pagination?.pages || 1) > 1 && ` • Page ${data?.pagination?.page || currentPage} of ${data?.pagination?.pages || 1}`}
                             </span>
                           ) : (
                             <span>
                               Showing {data?.releases?.length || 0} of {data?.totalFiltered || 0} releases (total: {data?.totalCollection || 0})
                               {isSorted && ` • Sorted by ${sortColumn} ${sortDirection === 'asc' ? '↑' : '↓'}`}
-                              {(data?.pagination?.pages || 1) > 1 && ` • Page ${data?.pagination?.page || currentPage} of ${data?.pagination?.pages || 1}`}
                             </span>
                           )}
                         </div>
@@ -2010,18 +2080,21 @@ export default function DiscogsCollection() {
                     })()}
 
                     <div className="space-y-4">
-                      <div className="flex items-center justify-between lg:hidden">
-                        <div className="flex items-center gap-4">
+                      <div className="flex flex-col gap-3 border-b pb-4 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="flex flex-wrap items-center gap-4">
                           <CollectionViewToggle viewMode={viewMode} onViewModeChange={handleViewModeChange} />
                           <CollectionRowsPerPageDropdown
                             viewMode={viewMode}
                             rowsPerPage={rowsPerPage}
                             onRowsPerPageChange={handleRowsPerPageChange}
                           />
-                        </div>
-                        <div className="text-sm text-muted-foreground">
-                          Showing {data?.releases?.length || 0} of {data?.totalFiltered || 0} releases
-                          {(data?.pagination?.pages || 1) > 1 && ` • Page ${data?.pagination?.page || currentPage} of ${data?.pagination?.pages || 1}`}
+                          {viewMode === 'cards' && (
+                            <CollectionCardSortingControls
+                              sortColumn={sortColumn}
+                              sortDirection={sortDirection}
+                              onSort={handleSort}
+                            />
+                          )}
                         </div>
                       </div>
                       <div className="flex justify-end">
@@ -2514,13 +2587,6 @@ export default function DiscogsCollection() {
                       ) : (
                         /* Card View */
                         <div>
-                          <div className="lg:hidden">
-                            <CollectionCardSortingControls
-                              sortColumn={sortColumn}
-                              sortDirection={sortDirection}
-                              onSort={handleSort}
-                            />
-                          </div>
                           <div className="space-y-6">
                             {(() => {
                               const releases = data?.releases || [];

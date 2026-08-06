@@ -5,6 +5,12 @@ import { secureFetch, sanitizeErrorForLogging } from '@/lib/secureFetch';
 import { rateLimit } from '@/lib/rateLimiter';
 import { rejectIfNotLocal } from '@/lib/requestSecurity';
 import { rejectIfNotConfigured } from '@/lib/setup';
+import {
+  CollectionSyncPeriod,
+  getCollectionSyncCutoff,
+  getCollectionSyncPeriodLabel,
+  parseCollectionSyncPeriod,
+} from '@/lib/collectionSyncPeriod';
 
 /**
  * Update Collection API
@@ -20,25 +26,98 @@ interface IdRow {
   id: number | bigint;
 }
 
-export async function POST(request: NextRequest) {
-  const localOnlyResponse = rejectIfNotLocal(request);
-  if (localOnlyResponse) {
-    return localOnlyResponse;
+type CollectionUpdateJobStatus = {
+  id: string;
+  status: 'idle' | 'running' | 'completed' | 'failed' | 'stopped';
+  period: CollectionSyncPeriod;
+  progress: number;
+  total: number;
+  processed: number;
+  startTime: Date | null;
+  endTime: Date | null;
+  error: string | null;
+  results: {
+    newReleases: number;
+    conditionsUpdated: number;
+    errors: number;
+  };
+};
+
+const createInitialJobStatus = (): CollectionUpdateJobStatus => ({
+  id: '',
+  status: 'idle',
+  period: 'all',
+  progress: 0,
+  total: 0,
+  processed: 0,
+  startTime: null,
+  endTime: null,
+  error: null,
+  results: {
+    newReleases: 0,
+    conditionsUpdated: 0,
+    errors: 0,
+  },
+});
+
+type CollectionUpdateJobState = {
+  status: CollectionUpdateJobStatus;
+  stopRequested: boolean;
+  abortController: AbortController | null;
+};
+
+const globalUpdateJobState = globalThis as typeof globalThis & {
+  __discogsCollectionUpdateJobState?: CollectionUpdateJobState;
+};
+
+function getUpdateJobState(): CollectionUpdateJobState {
+  if (!globalUpdateJobState.__discogsCollectionUpdateJobState) {
+    globalUpdateJobState.__discogsCollectionUpdateJobState = {
+      status: createInitialJobStatus(),
+      stopRequested: false,
+      abortController: null,
+    };
   }
 
-  const setupResponse = rejectIfNotConfigured();
-  if (setupResponse) {
-    return setupResponse;
+  return globalUpdateJobState.__discogsCollectionUpdateJobState;
+}
+
+function getUpdateJobStatus(): CollectionUpdateJobStatus {
+  const { status } = getUpdateJobState();
+  return { ...status, results: { ...status.results } };
+}
+
+function markUpdateJobStopped(): void {
+  const { status } = getUpdateJobState();
+  status.status = 'stopped';
+  status.error = null;
+  status.endTime = new Date();
+}
+
+function requestUpdateJobStop(): boolean {
+  const state = getUpdateJobState();
+  if (state.status.status !== 'running') {
+    return false;
   }
 
-  const rateLimitResult = rateLimit(request, '/api/discogs/update-collection');
+  state.stopRequested = true;
+  state.abortController?.abort();
+  return true;
+}
 
-  if (!rateLimitResult.allowed) {
-    return NextResponse.json(
-      { error: 'Too many requests', message: 'Rate limit exceeded' },
-      { status: 429 },
-    );
-  }
+async function runUpdateCollectionJob(period: CollectionSyncPeriod): Promise<void> {
+  const state = getUpdateJobState();
+  const jobId = `collection-update_${Date.now()}`;
+  const abortController = new AbortController();
+  state.stopRequested = false;
+  state.abortController = abortController;
+  state.status = {
+    ...createInitialJobStatus(),
+    id: jobId,
+    status: 'running',
+    period,
+    startTime: new Date(),
+  };
 
   try {
     const db = getDatabase();
@@ -46,14 +125,19 @@ export async function POST(request: NextRequest) {
     let conditionsUpdated = 0;
     let errors = 0;
 
-    console.log('Starting Update Collection job...');
+    console.log(`Starting Update Collection job for releases added within: ${getCollectionSyncPeriodLabel(period)}`);
 
     let collectionData: any[] = [];
     let page = 1;
     let hasMorePages = true;
 
     while (hasMorePages) {
-      const collectionUrl = `https://api.discogs.com/users/${config.discogsUsername}/collection/folders/0/releases?page=${page}&per_page=100`;
+      if (state.stopRequested) {
+        markUpdateJobStopped();
+        return;
+      }
+
+      const collectionUrl = `https://api.discogs.com/users/${config.discogsUsername}/collection/folders/0/releases?page=${page}&per_page=100&sort=added&sort_order=desc`;
 
       const response = await secureFetch(collectionUrl, {
         headers: {
@@ -61,6 +145,7 @@ export async function POST(request: NextRequest) {
           'Authorization': `Discogs token=${config.discogsToken}`,
         },
         timeout: 30000,
+        signal: abortController.signal,
       });
 
       if (!response.ok) {
@@ -79,7 +164,22 @@ export async function POST(request: NextRequest) {
       page++;
     }
 
-    console.log(`Total collection items fetched: ${collectionData.length}`);
+    if (state.stopRequested) {
+      markUpdateJobStopped();
+      return;
+    }
+
+    const cutoff = getCollectionSyncCutoff(period);
+    if (cutoff) {
+      const cutoffTime = cutoff.getTime();
+      collectionData = collectionData.filter((item) => {
+        const addedAt = new Date(item.date_added).getTime();
+        return Number.isFinite(addedAt) && addedAt >= cutoffTime;
+      });
+    }
+
+    console.log(`Collection items in scope (${getCollectionSyncPeriodLabel(period)}): ${collectionData.length}`);
+    state.status.total = collectionData.length;
 
     const rawDb = db.getDb();
     const statements = {
@@ -123,6 +223,10 @@ export async function POST(request: NextRequest) {
 
     const processCollectionData = rawDb.transaction((items: any[]) => {
       for (const item of items) {
+        if (state.stopRequested) {
+          break;
+        }
+
         try {
           const discogsId = item.basic_information?.id || item.id;
           const existingRelease = statements.selectRelease.get(discogsId) as IdRow | undefined;
@@ -195,6 +299,7 @@ export async function POST(request: NextRequest) {
             }
 
             newReleases++;
+            state.status.results.newReleases++;
             console.log(`Added new release: "${basicInfo?.title}" (ID: ${discogsId})`);
           } else {
             const mediaCondition = item.media_condition ||
@@ -209,32 +314,114 @@ export async function POST(request: NextRequest) {
                 Number(existingRelease.id),
               );
               conditionsUpdated++;
+              state.status.results.conditionsUpdated++;
             }
           }
         } catch (itemError: any) {
           console.error('Error processing release:', sanitizeErrorForLogging(itemError));
           errors++;
+          state.status.results.errors++;
         }
+
+        state.status.processed++;
+        state.status.progress = Math.round((state.status.processed / state.status.total) * 100);
       }
     });
 
     processCollectionData(collectionData);
 
-    console.log(`Update Collection completed: ${newReleases} new, ${conditionsUpdated} updated, ${errors} errors`);
+    if (state.stopRequested) {
+      markUpdateJobStopped();
+      return;
+    }
 
-    return NextResponse.json({
-      success: true,
-      newReleases,
-      conditionsUpdated,
-      errors,
-      totalProcessed: collectionData.length,
-      message: `Successfully processed ${collectionData.length} releases`,
-    });
+    state.status.status = 'completed';
+    state.status.progress = 100;
+    state.status.endTime = new Date();
+    console.log(`Update Collection completed: ${newReleases} new, ${conditionsUpdated} updated, ${errors} errors`);
   } catch (error: any) {
+    if (state.stopRequested) {
+      markUpdateJobStopped();
+      return;
+    }
+
     console.error('Error in Update Collection job:', sanitizeErrorForLogging(error));
+    state.status.status = 'failed';
+    state.status.error = error.message || 'Unknown error';
+    state.status.endTime = new Date();
+  } finally {
+    if (state.abortController === abortController) {
+      state.abortController = null;
+    }
+  }
+}
+
+export async function GET(request: NextRequest) {
+  const localOnlyResponse = rejectIfNotLocal(request);
+  if (localOnlyResponse) {
+    return localOnlyResponse;
+  }
+
+  const action = new URL(request.url).searchParams.get('action');
+  if (action !== 'status') {
+    return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
+  }
+
+  return NextResponse.json({ job: getUpdateJobStatus() });
+}
+
+export async function POST(request: NextRequest) {
+  const localOnlyResponse = rejectIfNotLocal(request);
+  if (localOnlyResponse) {
+    return localOnlyResponse;
+  }
+
+  const body = await request.json().catch(() => ({}));
+  const action = body.action || 'trigger';
+
+  if (action === 'stop') {
+    const stopped = requestUpdateJobStop();
+    return NextResponse.json({
+      message: stopped ? 'Collection import stop requested' : 'No collection import is running',
+      job: getUpdateJobStatus(),
+    });
+  }
+
+  if (action !== 'trigger') {
+    return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
+  }
+
+  const setupResponse = rejectIfNotConfigured();
+  if (setupResponse) {
+    return setupResponse;
+  }
+
+  const rateLimitResult = rateLimit(request, '/api/discogs/update-collection');
+  if (!rateLimitResult.allowed) {
     return NextResponse.json(
-      { error: 'Update failed', message: error.message || 'Unknown error' },
-      { status: 500 },
+      { error: 'Too many requests', message: 'Rate limit exceeded' },
+      { status: 429 },
     );
   }
+
+  if (getUpdateJobState().status.status === 'running') {
+    return NextResponse.json({
+      message: 'Collection import is already running',
+      job: getUpdateJobStatus(),
+    });
+  }
+
+  const period = parseCollectionSyncPeriod(body.period);
+  if (body.period !== undefined && !period) {
+    return NextResponse.json({ error: 'Invalid sync period' }, { status: 400 });
+  }
+
+  void runUpdateCollectionJob(period ?? 'all');
+  return NextResponse.json(
+    {
+      message: 'Collection import started',
+      job: getUpdateJobStatus(),
+    },
+    { status: 202 },
+  );
 }

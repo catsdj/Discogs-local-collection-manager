@@ -25,6 +25,34 @@ export interface SecureFetchOptions extends RequestInit {
   validateDomain?: boolean;
 }
 
+function createCancellationError(): Error {
+  const error = new Error('Request cancelled');
+  error.name = 'AbortError';
+  return error;
+}
+
+function waitForAbortableDelay(delayMs: number, signal?: AbortSignal | null): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(createCancellationError());
+      return;
+    }
+
+    const onAbort = () => {
+      clearTimeout(timeoutId);
+      signal?.removeEventListener('abort', onAbort);
+      reject(createCancellationError());
+    };
+
+    const timeoutId = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, delayMs);
+
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 /**
  * Validate URL is from an allowed domain
  */
@@ -66,6 +94,7 @@ export async function secureFetch(
     retries = MAX_RETRIES,
     retryDelay = RETRY_DELAY_MS,
     validateDomain: shouldValidateDomain = true,
+    signal: externalSignal,
     ...fetchOptions
   } = options;
 
@@ -74,19 +103,27 @@ export async function secureFetch(
     throw new Error('URL domain not allowed');
   }
 
+  if (externalSignal?.aborted) {
+    throw createCancellationError();
+  }
+
   let lastError: Error | null = null;
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeout);
+    let timedOut = false;
+    const timeoutId = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeout);
+    const abortForExternalSignal = () => controller.abort();
+    externalSignal?.addEventListener('abort', abortForExternalSignal, { once: true });
 
     try {
       const response = await fetch(url, {
         ...fetchOptions,
         signal: controller.signal,
       });
-
-      clearTimeout(timeoutId);
 
       // Don't retry on successful responses or 4xx client errors
       if (response.ok || (response.status >= 400 && response.status < 500)) {
@@ -98,13 +135,15 @@ export async function secureFetch(
       
       if (attempt < retries) {
         console.log(`[SecureFetch] Retry ${attempt + 1}/${retries} after ${response.status} for ${url}`);
-        await new Promise(resolve => setTimeout(resolve, retryDelay * (attempt + 1)));
+        await waitForAbortableDelay(retryDelay * (attempt + 1), externalSignal);
       }
 
     } catch (error: any) {
-      clearTimeout(timeoutId);
+      if (externalSignal?.aborted) {
+        throw createCancellationError();
+      }
 
-      if (error.name === 'AbortError') {
+      if (error.name === 'AbortError' && timedOut) {
         lastError = new Error(`Request timeout after ${timeout}ms`);
       } else {
         lastError = error;
@@ -113,8 +152,11 @@ export async function secureFetch(
       // Don't retry on abort/timeout in final attempt
       if (attempt < retries) {
         console.log(`[SecureFetch] Retry ${attempt + 1}/${retries} after error: ${error.message}`);
-        await new Promise(resolve => setTimeout(resolve, retryDelay * (attempt + 1)));
+        await waitForAbortableDelay(retryDelay * (attempt + 1), externalSignal);
       }
+    } finally {
+      clearTimeout(timeoutId);
+      externalSignal?.removeEventListener('abort', abortForExternalSignal);
     }
   }
 
@@ -143,7 +185,7 @@ export async function rateLimitedFetch(
     }
     
     console.log(`[SecureFetch] Rate limited, waiting ${waitTime}ms before retry`);
-    await new Promise(resolve => setTimeout(resolve, waitTime));
+    await waitForAbortableDelay(waitTime, options.signal);
     
     // Retry after waiting
     return secureFetch(url, options);

@@ -1,10 +1,16 @@
 import { getDatabase } from './database';
 import { config } from './config';
 import { rateLimitedFetch as secureRateLimitedFetch, sanitizeErrorForLogging } from './secureFetch';
+import {
+  CollectionSyncPeriod,
+  getCollectionSyncCutoff,
+  getCollectionSyncPeriodLabel,
+} from './collectionSyncPeriod';
 
 interface SyncJobStatus {
   id: string;
-  status: 'idle' | 'running' | 'completed' | 'failed';
+  status: 'idle' | 'running' | 'completed' | 'failed' | 'stopped';
+  period: CollectionSyncPeriod;
   progress: number;
   total: number;
   processed: number;
@@ -22,6 +28,7 @@ class DatabaseSyncService {
   private jobStatus: SyncJobStatus = {
     id: '',
     status: 'idle',
+    period: 'all',
     progress: 0,
     total: 0,
     processed: 0,
@@ -36,6 +43,8 @@ class DatabaseSyncService {
   };
 
   private syncInterval: NodeJS.Timeout | null = null;
+  private stopRequested = false;
+  private activeJobController: AbortController | null = null;
   private readonly SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
   
   // Simplified rate limiting state
@@ -55,8 +64,46 @@ class DatabaseSyncService {
     console.log('🔄 Database sync service initialized (on-demand mode)');
   }
 
+  private throwIfStopRequested(): void {
+    if (this.stopRequested) {
+      throw new Error('Sync stopped by user');
+    }
+  }
+
+  private waitForDelay(delayMs: number): Promise<void> {
+    const signal = this.activeJobController?.signal;
+
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(new Error('Sync stopped by user'));
+        return;
+      }
+
+      const onAbort = () => {
+        clearTimeout(timeoutId);
+        signal?.removeEventListener('abort', onAbort);
+        reject(new Error('Sync stopped by user'));
+      };
+
+      const timeoutId = setTimeout(() => {
+        signal?.removeEventListener('abort', onAbort);
+        resolve();
+      }, delayMs);
+
+      signal?.addEventListener('abort', onAbort, { once: true });
+    });
+  }
+
+  private markStopped(): void {
+    this.jobStatus.status = 'stopped';
+    this.jobStatus.error = null;
+    this.jobStatus.endTime = new Date();
+  }
+
   private async rateLimitedFetch(url: string, options: RequestInit): Promise<Response> {
     try {
+      this.throwIfStopRequested();
+
       // Check rate limiting
       const now = Date.now();
       if (now - this.lastMinuteReset >= 60000) {
@@ -67,7 +114,7 @@ class DatabaseSyncService {
       if (this.requestsThisMinute >= this.MAX_REQUESTS_PER_MINUTE) {
         const waitTime = 60000 - (now - this.lastMinuteReset);
         console.log(`⏳ Rate limit reached, waiting ${Math.ceil(waitTime / 1000)} seconds...`);
-        await new Promise(resolve => setTimeout(resolve, waitTime));
+        await this.waitForDelay(waitTime);
         this.requestsThisMinute = 0;
         this.lastMinuteReset = Date.now();
       }
@@ -78,6 +125,7 @@ class DatabaseSyncService {
         {
           ...options,
           timeout: 30000, // 30 second timeout
+          signal: this.activeJobController?.signal,
         },
         (waitTime) => {
           console.log(`⏳ Rate limited by API, waiting ${Math.ceil(waitTime / 1000)} seconds...`);
@@ -87,7 +135,8 @@ class DatabaseSyncService {
       this.requestsThisMinute++;
 
       // Add delay between requests
-      await new Promise(resolve => setTimeout(resolve, this.REQUEST_DELAY_MS));
+      await this.waitForDelay(this.REQUEST_DELAY_MS);
+      this.throwIfStopRequested();
 
       return response;
 
@@ -182,16 +231,21 @@ class DatabaseSyncService {
     console.log('🔄 Database sync service started - will run every 6 hours');
   }
 
-  async runSyncJob(): Promise<void> {
+  async runSyncJob(period: CollectionSyncPeriod = 'all'): Promise<void> {
     if (this.jobStatus.status === 'running') {
       console.log('⏳ Sync job already running, skipping...');
       return;
     }
 
+    this.stopRequested = false;
+    this.activeJobController = new AbortController();
+
     const jobId = `sync_${Date.now()}`;
+    console.log(`Database sync scope: releases added within ${getCollectionSyncPeriodLabel(period)}`);
     this.jobStatus = {
       id: jobId,
       status: 'running',
+      period,
       progress: 0,
       total: 0,
       processed: 0,
@@ -218,6 +272,7 @@ class DatabaseSyncService {
       // Get releases that need price/video updates (NOT conditions - that's in Update Collection job)
       // This is the "Get Release Data" job - fetches marketplace prices and videos only.
       // Existing marketplace prices are refreshed after 1 week so stale prices do not linger indefinitely.
+      const cutoff = getCollectionSyncCutoff(period)?.toISOString() ?? null;
       const releasesToSync = db.getDb().prepare(`
         SELECT r.id, r.discogs_id, r.title, r.last_sync_at, r.sync_status, r.media_condition, r.sleeve_condition,
                CASE WHEN (
@@ -259,8 +314,11 @@ class DatabaseSyncService {
           -- Missing tracklist (always try - tracklist should always exist)
           OR NOT EXISTS (SELECT 1 FROM tracks t WHERE t.release_id = r.id)
         )
-        ORDER BY r.created_at ASC
-      `).all() as Array<{
+        AND (? IS NULL OR datetime(r.date_added) >= datetime(?))
+        -- Prioritize recent additions so the newest collection releases gain
+        -- details and pricing first. created_at and id break ties consistently.
+        ORDER BY r.date_added DESC, r.created_at DESC, r.id DESC
+      `).all(cutoff, cutoff) as Array<{
         id: number;
         discogs_id: number;
         title: string;
@@ -273,6 +331,11 @@ class DatabaseSyncService {
         video_count: number;
         track_count: number;
       }>;
+
+      if (this.stopRequested) {
+        this.markStopped();
+        return;
+      }
 
       const pricesToRefresh = releasesToSync.filter(r => r.missing_price).length;
       const missingVideos = releasesToSync.filter(r => r.video_count === 0).length;
@@ -294,6 +357,10 @@ class DatabaseSyncService {
 
       // Process releases sequentially to respect rate limits
       for (let i = 0; i < releasesToSync.length; i++) {
+        if (this.stopRequested) {
+          break;
+        }
+
         const release = releasesToSync[i];
         
         try {
@@ -319,6 +386,10 @@ class DatabaseSyncService {
             console.log(`   ✅ Synced (no marketplace price available)`);
           }
         } catch (error: any) {
+          if (this.stopRequested) {
+            break;
+          }
+
           console.error(`   ❌ Error syncing release ${release.discogs_id}:`, error.message);
           this.jobStatus.results.errors++;
           this.consecutiveErrors++;
@@ -364,6 +435,11 @@ class DatabaseSyncService {
         }
       }
 
+      if (this.stopRequested) {
+        this.markStopped();
+        return;
+      }
+
       this.jobStatus.status = 'completed';
       this.jobStatus.endTime = new Date();
       
@@ -372,10 +448,17 @@ class DatabaseSyncService {
       console.log(`📊 Results: ${this.jobStatus.results.releasesUpdated} updated, ${this.jobStatus.results.errors} errors`);
 
     } catch (error: any) {
+      if (this.stopRequested) {
+        this.markStopped();
+        return;
+      }
+
       this.jobStatus.status = 'failed';
       this.jobStatus.error = error.message;
       this.jobStatus.endTime = new Date();
       console.error(`❌ Sync job ${jobId} failed:`, error.message);
+    } finally {
+      this.activeJobController = null;
     }
   }
 
@@ -647,6 +730,10 @@ class DatabaseSyncService {
       return { priceUpdated, price: priceValue || undefined };
 
     } catch (error: any) {
+      if (this.stopRequested) {
+        throw error;
+      }
+
       const duration = Date.now() - startTime;
       
       // Log failed sync
@@ -666,10 +753,22 @@ class DatabaseSyncService {
   }
 
   getJobStatus(): SyncJobStatus {
-    return { ...this.jobStatus };
+    return { ...this.jobStatus, results: { ...this.jobStatus.results } };
+  }
+
+  requestStop(): boolean {
+    if (this.jobStatus.status !== 'running') {
+      return false;
+    }
+
+    this.stopRequested = true;
+    this.activeJobController?.abort();
+    return true;
   }
 
   stop(): void {
+    this.requestStop();
+
     if (this.syncInterval) {
       clearInterval(this.syncInterval);
       this.syncInterval = null;
@@ -678,19 +777,23 @@ class DatabaseSyncService {
   }
 }
 
-// Singleton instance
-let syncServiceInstance: DatabaseSyncService | null = null;
+// Keep the service instance across Next.js development reloads. Without this,
+// an in-flight job can continue in an old module while a newly loaded route
+// reports an empty status object.
+const globalSyncService = globalThis as typeof globalThis & {
+  __discogsDatabaseSyncService?: DatabaseSyncService;
+};
 
 export function getDatabaseSyncService(): DatabaseSyncService {
-  if (!syncServiceInstance) {
-    syncServiceInstance = new DatabaseSyncService();
+  if (!globalSyncService.__discogsDatabaseSyncService) {
+    globalSyncService.__discogsDatabaseSyncService = new DatabaseSyncService();
   }
-  return syncServiceInstance;
+  return globalSyncService.__discogsDatabaseSyncService;
 }
 
 export function stopDatabaseSyncService(): void {
-  if (syncServiceInstance) {
-    syncServiceInstance.stop();
-    syncServiceInstance = null;
+  if (globalSyncService.__discogsDatabaseSyncService) {
+    globalSyncService.__discogsDatabaseSyncService.stop();
+    globalSyncService.__discogsDatabaseSyncService = undefined;
   }
 }

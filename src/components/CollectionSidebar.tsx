@@ -5,9 +5,16 @@ import Link from 'next/link';
 import { FileText, ListMusic, TrendingUp } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Select } from '@/components/ui/select';
 import StyleMultiSelect from '@/components/StyleMultiSelect';
+import {
+  COLLECTION_SYNC_PERIOD_OPTIONS,
+  CollectionSyncPeriod,
+} from '@/lib/collectionSyncPeriod';
 
 type ViewMode = 'table' | 'cards';
+
+export const COLLECTION_PAGE_SIZES = [8, 16, 24, 32, 48];
 
 interface ViewToggleProps {
   viewMode: ViewMode;
@@ -49,6 +56,62 @@ export const CollectionViewToggle = memo(function CollectionViewToggle({
   );
 });
 
+export function CollectionActionNotes() {
+  return (
+    <div className="space-y-2 rounded-md border bg-muted/50 p-3 text-xs leading-relaxed text-muted-foreground">
+      <p>
+        <span className="font-medium text-foreground">Refresh details &amp; prices:</span>{' '}
+        fills missing tracklists and videos, refreshes missing or week-old marketplace prices, and updates
+        core release details. It does not import new collection entries or update their conditions.
+      </p>
+      <p>
+        <span className="font-medium text-foreground">Import releases &amp; conditions:</span>{' '}
+        reads your Discogs collection, adds releases that are not yet stored locally, and updates media and
+        sleeve conditions. It does not remove local releases or refresh prices, videos, and tracklists.
+      </p>
+      <p>
+        <span className="font-medium text-foreground">Added within:</span>{' '}
+        limits both actions by the date a release was added to your Discogs collection, not its release year.
+      </p>
+    </div>
+  );
+}
+
+interface CollectionSyncPeriodSelectProps {
+  id: string;
+  value: CollectionSyncPeriod;
+  onChange: (period: CollectionSyncPeriod) => void;
+  disabled?: boolean;
+}
+
+export const CollectionSyncPeriodSelect = memo(function CollectionSyncPeriodSelect({
+  id,
+  value,
+  onChange,
+  disabled = false,
+}: CollectionSyncPeriodSelectProps) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <label className="text-sm text-muted-foreground" htmlFor={id}>
+        Added within:
+      </label>
+      <Select
+        id={id}
+        value={value}
+        onChange={(event) => onChange(event.target.value as CollectionSyncPeriod)}
+        disabled={disabled}
+        className="h-8 w-32 py-1"
+      >
+        {COLLECTION_SYNC_PERIOD_OPTIONS.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </Select>
+    </div>
+  );
+});
+
 interface RowsPerPageDropdownProps {
   viewMode: ViewMode;
   rowsPerPage: number;
@@ -65,29 +128,17 @@ export const CollectionRowsPerPageDropdown = memo(function CollectionRowsPerPage
       <span className="text-sm text-muted-foreground">
         {viewMode === 'cards' ? 'Cards per page:' : 'Rows per page:'}
       </span>
-      <select
+      <Select
         value={rowsPerPage}
         onChange={(e) => onRowsPerPageChange(parseInt(e.target.value, 10))}
-        className="px-2 py-1 text-sm border rounded bg-background"
+        className="h-8 w-28 py-1"
       >
-        {viewMode === 'cards' ? (
-          <>
-            <option value={8}>8 cards</option>
-            <option value={16}>16 cards</option>
-            <option value={24}>24 cards</option>
-            <option value={32}>32 cards</option>
-            <option value={48}>48 cards</option>
-          </>
-        ) : (
-          <>
-            <option value={10}>10 rows</option>
-            <option value={25}>25 rows</option>
-            <option value={50}>50 rows</option>
-            <option value={75}>75 rows</option>
-            <option value={100}>100 rows</option>
-          </>
-        )}
-      </select>
+        {COLLECTION_PAGE_SIZES.map((pageSize) => (
+          <option key={pageSize} value={pageSize}>
+            {pageSize} {viewMode === 'cards' ? 'cards' : 'rows'}
+          </option>
+        ))}
+      </Select>
     </div>
   );
 });
@@ -112,38 +163,31 @@ export const CollectionCardSortingControls = memo(function CollectionCardSorting
   ];
 
   return (
-    <div className="rounded-lg border bg-gray-50 p-3">
-      <div className="flex items-center justify-between mb-3">
-        <h3 className="text-sm font-medium text-gray-700">Sort by:</h3>
-        <button
-          type="button"
-          onClick={() => onSort('title')}
-          className="text-xs text-blue-600 hover:text-blue-800 hover:underline"
-        >
-          Reset to Title
-        </button>
-      </div>
-
-      <div className="grid grid-cols-1 gap-2">
+    <div className="flex flex-wrap items-center gap-2">
+      <label className="text-sm text-muted-foreground" htmlFor="card-sort">
+        Sort by:
+      </label>
+      <Select
+        id="card-sort"
+        value={sortColumn}
+        onChange={(event) => onSort(event.target.value)}
+        className="h-8 w-44 py-1"
+      >
         {sortOptions.map((option) => (
-          <button
-            key={option.value}
-            type="button"
-            onClick={() => onSort(option.value)}
-            className={`flex items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm transition-colors ${
-              sortColumn === option.value
-                ? 'bg-blue-600 text-white border-blue-600'
-                : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
-            }`}
-          >
-            <span>{option.icon}</span>
-            <span>{option.label}</span>
-            {sortColumn === option.value && (
-              <span className="text-xs">{sortDirection === 'asc' ? '↑' : '↓'}</span>
-            )}
-          </button>
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
         ))}
-      </div>
+      </Select>
+      <Button
+        type="button"
+        onClick={() => onSort(sortColumn)}
+        variant="outline"
+        size="sm"
+        aria-label={`Toggle sort direction; currently ${sortDirection === 'asc' ? 'ascending' : 'descending'}`}
+      >
+        {sortDirection === 'asc' ? '↑ Ascending' : '↓ Descending'}
+      </Button>
     </div>
   );
 });
@@ -158,13 +202,8 @@ export interface CollectionSidebarProps {
   discogsActionsDisabled: boolean;
   onSyncCollection: () => void;
   onUpdateCollection: () => void;
-  viewMode: ViewMode;
-  onViewModeChange: (mode: ViewMode) => void;
-  rowsPerPage: number;
-  onRowsPerPageChange: (value: number) => void;
-  sortColumn: string;
-  sortDirection: 'asc' | 'desc';
-  onSort: (column: string) => void;
+  syncPeriod: CollectionSyncPeriod;
+  onSyncPeriodChange: (period: CollectionSyncPeriod) => void;
   allAvailableStyles: string[];
   selectedStyles: string[];
   onStyleSelectionChange: (styles: string[]) => void;
@@ -184,13 +223,8 @@ const CollectionSidebar = memo(function CollectionSidebar({
   discogsActionsDisabled,
   onSyncCollection,
   onUpdateCollection,
-  viewMode,
-  onViewModeChange,
-  rowsPerPage,
-  onRowsPerPageChange,
-  sortColumn,
-  sortDirection,
-  onSort,
+  syncPeriod,
+  onSyncPeriodChange,
   allAvailableStyles,
   selectedStyles,
   onStyleSelectionChange,
@@ -202,6 +236,34 @@ const CollectionSidebar = memo(function CollectionSidebar({
   return (
     <aside className="hidden lg:block">
       <div className="sticky top-4 space-y-4">
+        <Card className="rounded-lg py-4">
+          <CardHeader className="px-4 pb-2">
+            <CardTitle className="text-base">Styles Filter</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 px-4">
+            {allAvailableStyles.length > 0 ? (
+              <StyleMultiSelect
+                styles={allAvailableStyles}
+                selectedStyles={selectedStyles}
+                onSelectionChange={onStyleSelectionChange}
+                open={styleFilterOpen}
+                onOpenChange={onStyleFilterOpenChange}
+                placeholder="Select styles..."
+                className="w-full"
+              />
+            ) : (
+              <div className="text-sm text-muted-foreground">
+                {isCollectionLoading ? 'Loading styles...' : 'No styles available'}
+              </div>
+            )}
+            {showClearFilters && (
+              <Button variant="outline" onClick={onClearFilters} disabled={isCollectionLoading} className="w-full">
+                Clear Filters
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+
         <Card className="rounded-lg py-4">
           <CardHeader className="px-4 pb-2">
             <CardTitle className="text-base">Tools</CardTitle>
@@ -233,12 +295,28 @@ const CollectionSidebar = memo(function CollectionSidebar({
             <CardTitle className="text-base">Actions</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3 px-4">
-            <Button onClick={onSyncCollection} disabled={discogsActionsDisabled} className="w-full">
-              {isSyncing ? 'Fetching...' : 'Get Release Data'}
+            <CollectionSyncPeriodSelect
+              id="collection-sync-period-desktop"
+              value={syncPeriod}
+              onChange={onSyncPeriodChange}
+              disabled={isSyncing || isUpdating}
+            />
+            <Button
+              onClick={onSyncCollection}
+              disabled={discogsActionsDisabled || (isUpdating && !isSyncing)}
+              className="w-full"
+            >
+              {isSyncing ? 'Stop Refresh' : 'Refresh Details & Prices'}
             </Button>
-            <Button variant="outline" onClick={onUpdateCollection} disabled={discogsActionsDisabled} className="w-full">
-              {isUpdating ? 'Updating...' : 'Update Collection'}
+            <Button
+              variant="outline"
+              onClick={onUpdateCollection}
+              disabled={discogsActionsDisabled || (isSyncing && !isUpdating)}
+              className="w-full"
+            >
+              {isUpdating ? 'Stop Import' : 'Import Releases & Conditions'}
             </Button>
+            <CollectionActionNotes />
             <div className="rounded-md bg-muted p-2 text-xs text-muted-foreground">
               Database: {syncedReleaseCount} releases synced
             </div>
@@ -256,54 +334,6 @@ const CollectionSidebar = memo(function CollectionSidebar({
           </CardContent>
         </Card>
 
-        <Card className="rounded-lg py-4">
-          <CardHeader className="px-4 pb-2">
-            <CardTitle className="text-base">Display</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3 px-4">
-            <CollectionViewToggle viewMode={viewMode} onViewModeChange={onViewModeChange} />
-            <CollectionRowsPerPageDropdown
-              viewMode={viewMode}
-              rowsPerPage={rowsPerPage}
-              onRowsPerPageChange={onRowsPerPageChange}
-            />
-            {viewMode === 'cards' && (
-              <CollectionCardSortingControls
-                sortColumn={sortColumn}
-                sortDirection={sortDirection}
-                onSort={onSort}
-              />
-            )}
-          </CardContent>
-        </Card>
-
-        <Card className="rounded-lg py-4">
-          <CardHeader className="px-4 pb-2">
-            <CardTitle className="text-base">Filters</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3 px-4">
-            {allAvailableStyles.length > 0 ? (
-              <StyleMultiSelect
-                styles={allAvailableStyles}
-                selectedStyles={selectedStyles}
-                onSelectionChange={onStyleSelectionChange}
-                open={styleFilterOpen}
-                onOpenChange={onStyleFilterOpenChange}
-                placeholder="Select styles..."
-                className="w-full"
-              />
-            ) : (
-              <div className="text-sm text-muted-foreground">
-                {isCollectionLoading ? 'Loading styles...' : 'No styles available'}
-              </div>
-            )}
-            {showClearFilters && (
-              <Button variant="outline" onClick={onClearFilters} disabled={isCollectionLoading} className="w-full">
-                Clear Filters
-              </Button>
-            )}
-          </CardContent>
-        </Card>
       </div>
     </aside>
   );
