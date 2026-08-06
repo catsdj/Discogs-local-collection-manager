@@ -66,15 +66,59 @@ This is WIP. Bugs and inconsistencies may be present :)
 - Database indexes and migration scripts for evolving schema/performance
 - Caching and sync control utilities for heavy collection operations
 
-## Quick start
+## First-time installation (from source)
+
+This repository is not yet a packaged desktop application. To run it, install the runtime and dependencies once on your computer.
+
+### Prerequisites
+
+- **Node.js 20.9 or later** (use the current LTS installer from [nodejs.org](https://nodejs.org/)). Node.js installs **npm** automatically.
+- **Git**, only if you plan to clone the repository rather than download its source archive.
+
+Open a terminal and confirm that Node.js and npm are available:
+
+```bash
+node --version
+npm --version
+```
+
+Both commands must print a version. If either command is not recognized after installing Node.js, close and reopen the terminal so it can pick up the updated system path.
+
+### Download the source and install dependencies
+
+Choose a folder where you want to keep the app, then open a terminal in that folder. You can use your file manager's **Open in Terminal** action, or navigate there with:
+
+```bash
+cd "<folder where you keep projects>"
+```
+
+Clone the repository from that terminal. This creates a new `Discogs-local-collection-manager` folder inside the folder you chose. Then enter the new app folder:
+
+```bash
+git clone https://github.com/catsdj/Discogs-local-collection-manager.git
+cd Discogs-local-collection-manager
+```
+
+Alternatively, download and extract the repository ZIP from GitHub, then open a terminal in the extracted folder.
+
+Install the app dependencies:
 
 ```bash
 npm install
+```
+
+This may take a few minutes on the first run. The app uses SQLite through `better-sqlite3`; if installation fails, first confirm that you are using a supported Node.js LTS version, then run `npm install` again.
+
+## Run the app
+
+```bash
 npm run setup   # or configure .env.local manually — see Setup below
 npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000).
+
+To stop the app, return to the terminal and press `Ctrl+C`. On later runs, open this project folder and run `npm run dev`.
 
 ## Setup
 
@@ -130,8 +174,8 @@ The app **starts without** `.env.local`. You are not blocked at install time.
 | With credentials | Without credentials |
 | --- | --- |
 | Browse your local SQLite collection | Browse your local SQLite collection (if already synced) |
-| Update collection from Discogs | Setup guidance shown in the UI |
-| Sync release data, prices, videos | Sync buttons disabled |
+| Import new releases and condition changes from Discogs | Setup guidance shown in the UI |
+| Refresh release details, prices, videos, and tracklists | Sync buttons disabled |
 | Invoice import against Discogs | Invoice import blocked until configured |
 
 If credentials are missing, the UI shows a setup card with steps. API routes that talk to Discogs return a structured `SETUP_REQUIRED` response instead of crashing the server.
@@ -140,9 +184,15 @@ If credentials are missing, the UI shows a setup card with steps. API routes tha
 
 1. Run `npm run dev`
 2. Open the collection page — the setup banner should be gone
-3. Use **Update Collection** or **Get Release Data** — they should be enabled and reach Discogs
+3. Use **Import Releases & Conditions** or **Refresh Details & Prices** — they should be enabled and reach Discogs
 
 If something still fails, check the terminal for warnings about missing `DISCOGS_API_TOKEN` or `DISCOGS_USERNAME`.
+
+### Collection actions
+
+**Refresh Details & Prices** processes locally stored releases that have a missing tracklist or video, or a missing or stale marketplace price (prices are rechecked after one week). It refreshes those release details from Discogs. It does **not** add new collection entries or update their media and sleeve conditions.
+
+**Import Releases & Conditions** reads your Discogs collection and creates local records for releases that are not already stored. It also refreshes media and sleeve conditions for releases it finds. This is one-way: it does **not** remove a release from the local database when it has been removed from Discogs, and it does not refresh prices, videos, or tracklists.
 
 ## Scripts
 

@@ -8,14 +8,44 @@
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
+const { Writable } = require('stream');
 const { initializeLocalDatabase } = require('./init-database.cjs');
+
+const mutedOutput = new Writable({
+  write(chunk, encoding, callback) {
+    if (!mutedOutput.muted) {
+      process.stdout.write(chunk, encoding);
+    }
+    callback();
+  },
+});
+mutedOutput.muted = false;
 
 const rl = readline.createInterface({
   input: process.stdin,
-  output: process.stdout
+  output: mutedOutput,
+  terminal: Boolean(process.stdin.isTTY && process.stdout.isTTY),
 });
 
 const question = (query) => new Promise((resolve) => rl.question(query, resolve));
+
+function questionSecret(query) {
+  // Hiding input requires an interactive terminal. Non-interactive callers do
+  // not echo stdin, so keep the normal readline behavior for automation.
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    return question(query);
+  }
+
+  mutedOutput.muted = false;
+  const answer = question(query);
+  mutedOutput.muted = true;
+
+  return answer.then((value) => {
+    mutedOutput.muted = false;
+    process.stdout.write('\n');
+    return value;
+  });
+}
 
 async function setup() {
   console.log('🎵 Discogs Collection Manager Setup');
@@ -48,7 +78,7 @@ async function setup() {
   console.log('📝 Please provide your Discogs API credentials:');
   console.log('   Get your API token from: https://www.discogs.com/settings/developers\n');
 
-  const apiToken = await question('Discogs API Token: ');
+  const apiToken = await questionSecret('Discogs API Token: ');
   const username = await question('Discogs Username: ');
   const appUrl = await question('App URL (default: http://localhost:3000): ') || 'http://localhost:3000';
 
