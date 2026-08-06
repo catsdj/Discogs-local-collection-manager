@@ -1,0 +1,14 @@
+.git
+.github
+.agents
+.tmp-hyperframes
+node_modules
+.next
+data
+.env*
+tools
+tests
+videos
+playwright.config.ts
+README.md
+CHANGELOG.md

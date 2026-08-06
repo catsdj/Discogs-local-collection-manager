@@ -25,204 +25,153 @@ export interface CollectionPlaylist {
   updatedAt: string;
 }
 
-const PLAYLISTS_STORAGE_KEY = 'discogsCollectionPlaylists';
-const PLAYLISTS_CHANGED_EVENT = 'discogs-playlists-changed';
-
-const isBrowser = () => typeof window !== 'undefined';
-
-const createId = () => {
-  if (isBrowser() && window.crypto?.randomUUID) {
-    return window.crypto.randomUUID();
+async function readResponse(response: Response): Promise<Record<string, unknown>> {
+  const body = await response.json().catch(() => ({})) as Record<string, unknown>;
+  if (!response.ok) {
+    throw new Error(typeof body.error === 'string' ? body.error : 'Playlist request failed.');
   }
 
-  return `playlist-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-};
+  return body;
+}
 
-const normalizePlaylist = (playlist: CollectionPlaylist): CollectionPlaylist => ({
-  ...playlist,
-  releaseIds: Array.from(new Set(playlist.releaseIds || [])),
-  releases: playlist.releases || {},
-});
+async function fetchPlaylists(): Promise<CollectionPlaylist[]> {
+  const response = await fetch('/api/playlists');
+  const body = await readResponse(response);
+  return Array.isArray(body.playlists) ? body.playlists as CollectionPlaylist[] : [];
+}
 
-const readPlaylists = (): CollectionPlaylist[] => {
-  if (!isBrowser()) {
-    return [];
-  }
+async function postPlaylistAction(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const response = await fetch('/api/playlists', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
 
-  try {
-    const raw = window.localStorage.getItem(PLAYLISTS_STORAGE_KEY);
-    if (!raw) {
-      return [];
-    }
-
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-
-    return parsed.map(normalizePlaylist);
-  } catch (error) {
-    console.error('Failed to read playlists from localStorage:', error);
-    return [];
-  }
-};
-
-const writePlaylists = (playlists: CollectionPlaylist[]) => {
-  if (!isBrowser()) {
-    return;
-  }
-
-  window.localStorage.setItem(PLAYLISTS_STORAGE_KEY, JSON.stringify(playlists));
-  window.dispatchEvent(new CustomEvent(PLAYLISTS_CHANGED_EVENT));
-};
-
-export const createPlaylistSnapshot = (release: DiscogsRelease): PlaylistReleaseSnapshot => ({
-  id: release.basic_information.id,
-  collectionId: release.id,
-  title: release.basic_information.title,
-  artist: release.basic_information.artists.map((artist) => artist.name).join(', '),
-  year: release.basic_information.year,
-  coverImage: release.basic_information.cover_image,
-  labels: release.basic_information.labels.map((label) => label.name),
-  styles: release.basic_information.styles,
-  dateAdded: release.date_added,
-});
+  return readResponse(response);
+}
 
 export function usePlaylists() {
   const [playlists, setPlaylists] = useState<CollectionPlaylist[]>([]);
 
-  useEffect(() => {
-    const refresh = () => setPlaylists(readPlaylists());
+  const refreshPlaylists = useCallback(async (): Promise<CollectionPlaylist[]> => {
+    const nextPlaylists = await fetchPlaylists();
+    setPlaylists(nextPlaylists);
+    return nextPlaylists;
+  }, []);
 
-    refresh();
-    window.addEventListener('storage', refresh);
-    window.addEventListener(PLAYLISTS_CHANGED_EVENT, refresh);
+  useEffect(() => {
+    let cancelled = false;
+
+    const initialize = async () => {
+      try {
+        const nextPlaylists = await fetchPlaylists();
+
+        if (!cancelled) {
+          setPlaylists(nextPlaylists);
+        }
+      } catch (error) {
+        console.error('Failed to load playlists:', error);
+      }
+    };
+
+    const refreshOnFocus = () => {
+      void refreshPlaylists().catch((error) => console.error('Failed to refresh playlists:', error));
+    };
+
+    void initialize();
+    window.addEventListener('focus', refreshOnFocus);
 
     return () => {
-      window.removeEventListener('storage', refresh);
-      window.removeEventListener(PLAYLISTS_CHANGED_EVENT, refresh);
+      cancelled = true;
+      window.removeEventListener('focus', refreshOnFocus);
     };
+  }, [refreshPlaylists]);
+
+  const replacePlaylist = useCallback((playlist: CollectionPlaylist) => {
+    setPlaylists((current) => current.map((item) => (item.id === playlist.id ? playlist : item)));
   }, []);
 
-  const updatePlaylists = useCallback((updater: (current: CollectionPlaylist[]) => CollectionPlaylist[]) => {
-    const nextPlaylists = updater(readPlaylists()).map(normalizePlaylist);
-    writePlaylists(nextPlaylists);
-    setPlaylists(nextPlaylists);
-  }, []);
-
-  const createPlaylist = useCallback((name: string, description?: string) => {
+  const createPlaylist = useCallback(async (name: string, description?: string): Promise<CollectionPlaylist | null> => {
     const trimmedName = name.trim();
     if (!trimmedName) {
       return null;
     }
 
-    const now = new Date().toISOString();
-    const playlist: CollectionPlaylist = {
-      id: createId(),
-      name: trimmedName,
-      description: description?.trim() || undefined,
-      releaseIds: [],
-      releases: {},
-      createdAt: now,
-      updatedAt: now,
-    };
+    const body = await postPlaylistAction({ action: 'create', name: trimmedName, description });
+    const playlist = body.playlist as CollectionPlaylist | null;
+    if (!playlist) {
+      throw new Error('Playlist was created without a response payload.');
+    }
 
-    updatePlaylists((current) => [...current, playlist]);
+    setPlaylists((current) => [playlist, ...current]);
     return playlist;
-  }, [updatePlaylists]);
+  }, []);
 
-  const deletePlaylist = useCallback((playlistId: string) => {
-    updatePlaylists((current) => current.filter((playlist) => playlist.id !== playlistId));
-  }, [updatePlaylists]);
+  const deletePlaylist = useCallback(async (playlistId: string): Promise<void> => {
+    await postPlaylistAction({ action: 'delete', playlistId });
+    setPlaylists((current) => current.filter((playlist) => playlist.id !== playlistId));
+  }, []);
 
-  const addReleaseToPlaylist = useCallback((playlistId: string, release: DiscogsRelease) => {
-    const snapshot = createPlaylistSnapshot(release);
-    const now = new Date().toISOString();
+  const addReleaseToPlaylist = useCallback(async (playlistId: string, release: DiscogsRelease): Promise<void> => {
+    const body = await postPlaylistAction({
+      action: 'add-release',
+      playlistId,
+      releaseId: release.basic_information.id,
+    });
+    const playlist = body.playlist as CollectionPlaylist | null;
+    if (!playlist) {
+      throw new Error('Playlist update did not return the updated playlist.');
+    }
 
-    updatePlaylists((current) =>
-      current.map((playlist) => {
-        if (playlist.id !== playlistId) {
-          return playlist;
-        }
+    replacePlaylist(playlist);
+  }, [replacePlaylist]);
 
-        return {
-          ...playlist,
-          releaseIds: Array.from(new Set([...playlist.releaseIds, snapshot.id])),
-          releases: {
-            ...playlist.releases,
-            [snapshot.id]: snapshot,
-          },
-          updatedAt: now,
-        };
-      })
-    );
-  }, [updatePlaylists]);
+  const removeReleaseFromPlaylist = useCallback(async (playlistId: string, releaseId: number): Promise<void> => {
+    const body = await postPlaylistAction({ action: 'remove-release', playlistId, releaseId });
+    const playlist = body.playlist as CollectionPlaylist | null;
+    if (!playlist) {
+      throw new Error('Playlist update did not return the updated playlist.');
+    }
 
-  const removeReleaseFromPlaylist = useCallback((playlistId: string, releaseId: number) => {
-    const now = new Date().toISOString();
+    replacePlaylist(playlist);
+  }, [replacePlaylist]);
 
-    updatePlaylists((current) =>
-      current.map((playlist) => {
-        if (playlist.id !== playlistId) {
-          return playlist;
-        }
+  const reorderPlaylistReleases = useCallback(async (playlistId: string, orderedReleaseIds: number[]): Promise<void> => {
+    const body = await postPlaylistAction({
+      action: 'reorder-releases',
+      playlistId,
+      releaseIds: orderedReleaseIds,
+    });
+    const playlist = body.playlist as CollectionPlaylist | null;
+    if (!playlist) {
+      throw new Error('Playlist update did not return the updated playlist.');
+    }
 
-        const remainingReleases = { ...playlist.releases };
-        delete remainingReleases[releaseId];
+    replacePlaylist(playlist);
+  }, [replacePlaylist]);
 
-        return {
-          ...playlist,
-          releaseIds: playlist.releaseIds.filter((id) => id !== releaseId),
-          releases: remainingReleases,
-          updatedAt: now,
-        };
-      })
-    );
-  }, [updatePlaylists]);
-
-  const reorderPlaylistReleases = useCallback((playlistId: string, orderedReleaseIds: number[]) => {
-    const now = new Date().toISOString();
-
-    updatePlaylists((current) =>
-      current.map((playlist) => {
-        if (playlist.id !== playlistId) {
-          return playlist;
-        }
-
-        const knownReleaseIds = new Set(playlist.releaseIds);
-        const orderedKnownIds = orderedReleaseIds.filter((releaseId) => knownReleaseIds.has(releaseId));
-        const missingIds = playlist.releaseIds.filter((releaseId) => !orderedKnownIds.includes(releaseId));
-
-        return {
-          ...playlist,
-          releaseIds: [...orderedKnownIds, ...missingIds],
-          updatedAt: now,
-        };
-      })
-    );
-  }, [updatePlaylists]);
-
-  const toggleReleaseInPlaylist = useCallback((playlistId: string, release: DiscogsRelease) => {
+  const toggleReleaseInPlaylist = useCallback(async (playlistId: string, release: DiscogsRelease): Promise<void> => {
     const releaseId = release.basic_information.id;
-    const playlist = readPlaylists().find((item) => item.id === playlistId);
+    const playlist = playlists.find((item) => item.id === playlistId);
 
     if (playlist?.releaseIds.includes(releaseId)) {
-      removeReleaseFromPlaylist(playlistId, releaseId);
+      await removeReleaseFromPlaylist(playlistId, releaseId);
       return;
     }
 
-    addReleaseToPlaylist(playlistId, release);
-  }, [addReleaseToPlaylist, removeReleaseFromPlaylist]);
+    await addReleaseToPlaylist(playlistId, release);
+  }, [addReleaseToPlaylist, playlists, removeReleaseFromPlaylist]);
 
   const getPlaylistsForRelease = useCallback((releaseId: number) => (
-    readPlaylists().filter((playlist) => playlist.releaseIds.includes(releaseId))
-  ), []);
+    playlists.filter((playlist) => playlist.releaseIds.includes(releaseId))
+  ), [playlists]);
 
   const playlistCount = useMemo(() => playlists.length, [playlists]);
 
   return {
     playlists,
     playlistCount,
+    refreshPlaylists,
     createPlaylist,
     deletePlaylist,
     addReleaseToPlaylist,

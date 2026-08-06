@@ -15,6 +15,13 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "setup": "node scripts/setup.cjs",
     "db:init": "node scripts/init-database.cjs",
+    "db:status": "node tools/admin/check-sync-status.cjs",
+    "db:explore": "node tools/admin/explore-database.cjs",
+    "db:flagged": "node tools/admin/check-all-flagged-releases.cjs",
+    "db:no-listings": "node tools/admin/check-no-listing-releases.cjs",
+    "db:recheck-flagged": "node tools/admin/periodic-recheck-flagged-releases.cjs",
+    "verify:security": "node tools/dev/test-security-hardening.cjs",
+    "verify:performance": "node tools/dev/verify-performance-optimizations.cjs",
     "security:audit": "npm audit --production",
     "security:fix": "npm audit fix --production",
     "security:check": "npm outdated && npm audit --production"

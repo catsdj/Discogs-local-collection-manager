@@ -1127,12 +1127,18 @@ export default function DiscogsCollection() {
                       type="checkbox"
                       checked={checked}
                       onChange={() => {
-                        toggleReleaseInPlaylist(playlist.id, release);
-                        toast.success(
-                          checked
-                            ? `Removed from "${playlist.name}"`
-                            : `Added to "${playlist.name}"`
-                        );
+                        void toggleReleaseInPlaylist(playlist.id, release)
+                          .then(() => {
+                            toast.success(
+                              checked
+                                ? `Removed from "${playlist.name}"`
+                                : `Added to "${playlist.name}"`
+                            );
+                          })
+                          .catch((error) => {
+                            console.error('Failed to update playlist:', error);
+                            toast.error('Failed to update playlist');
+                          });
                       }}
                       className="h-4 w-4 rounded border-gray-300"
                     />

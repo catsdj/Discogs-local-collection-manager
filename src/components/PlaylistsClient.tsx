@@ -22,7 +22,7 @@ function PlaylistReleaseCard({
 }: {
   release: CollectionPlaylist['releases'][number];
   playlistId: string;
-  onRemove: (playlistId: string, releaseId: number) => void;
+  onRemove: (playlistId: string, releaseId: number) => Promise<void>;
   isDragging: boolean;
   onDragStart: (releaseId: number) => void;
   onDragEnter: (releaseId: number) => void;
@@ -90,7 +90,7 @@ function PlaylistReleaseCard({
       <Button
         variant="ghost"
         size="icon"
-        onClick={() => onRemove(playlistId, release.id)}
+        onClick={() => { void onRemove(playlistId, release.id); }}
         title="Remove from playlist"
         aria-label={`Remove ${release.title} from playlist`}
         className="self-start"
@@ -114,28 +114,43 @@ export default function PlaylistsClient() {
     [playlists, selectedPlaylistId]
   );
 
-  const handleCreatePlaylist = (event: FormEvent<HTMLFormElement>) => {
+  const handleCreatePlaylist = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
-    const playlist = createPlaylist(name, description);
-    if (!playlist) {
-      toast.error('Playlist name is required');
-      return;
+    try {
+      const playlist = await createPlaylist(name, description);
+      if (!playlist) {
+        toast.error('Playlist name is required');
+        return;
+      }
+
+      setName('');
+      setDescription('');
+      toast.success(`Created "${playlist.name}"`);
+    } catch (error) {
+      console.error('Failed to create playlist:', error);
+      toast.error('Failed to create playlist');
     }
-
-    setName('');
-    setDescription('');
-    toast.success(`Created "${playlist.name}"`);
   };
 
-  const handleDeletePlaylist = (playlist: CollectionPlaylist) => {
-    deletePlaylist(playlist.id);
-    toast.success(`Deleted "${playlist.name}"`);
+  const handleDeletePlaylist = async (playlist: CollectionPlaylist) => {
+    try {
+      await deletePlaylist(playlist.id);
+      toast.success(`Deleted "${playlist.name}"`);
+    } catch (error) {
+      console.error('Failed to delete playlist:', error);
+      toast.error('Failed to delete playlist');
+    }
   };
 
-  const handleRemoveRelease = (playlistId: string, releaseId: number) => {
-    removeReleaseFromPlaylist(playlistId, releaseId);
-    toast.success('Removed from playlist');
+  const handleRemoveRelease = async (playlistId: string, releaseId: number) => {
+    try {
+      await removeReleaseFromPlaylist(playlistId, releaseId);
+      toast.success('Removed from playlist');
+    } catch (error) {
+      console.error('Failed to remove release from playlist:', error);
+      toast.error('Failed to remove release from playlist');
+    }
   };
 
   const handleDragStart = (releaseId: number) => {
@@ -158,7 +173,10 @@ export default function PlaylistsClient() {
     const nextIds = [...currentIds];
     const [movedId] = nextIds.splice(fromIndex, 1);
     nextIds.splice(toIndex, 0, movedId);
-    reorderPlaylistReleases(selectedPlaylist.id, nextIds);
+    void reorderPlaylistReleases(selectedPlaylist.id, nextIds).catch((error) => {
+      console.error('Failed to reorder playlist:', error);
+      toast.error('Failed to reorder playlist');
+    });
   };
 
   const handleDragEnd = () => {
@@ -191,7 +209,7 @@ export default function PlaylistsClient() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <form className="space-y-3" onSubmit={handleCreatePlaylist}>
+                <form className="space-y-3" onSubmit={(event) => { void handleCreatePlaylist(event); }}>
                   <div className="space-y-1">
                     <label htmlFor="playlist-name" className="text-sm font-medium">Name</label>
                     <input
@@ -239,7 +257,7 @@ export default function PlaylistsClient() {
                       <Button
                         variant="ghost"
                         size="icon"
-                        onClick={() => handleDeletePlaylist(playlist)}
+                        onClick={() => { void handleDeletePlaylist(playlist); }}
                         title="Delete playlist"
                         aria-label={`Delete ${playlist.name}`}
                       >

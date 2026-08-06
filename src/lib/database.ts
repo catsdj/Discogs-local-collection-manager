@@ -135,6 +135,16 @@ export interface SyncLogRecord {
   created_at: string;
 }
 
+type ColumnDefinition = {
+  name: string;
+  sqlDefinition: string;
+};
+
+type SchemaMigration = {
+  id: string;
+  apply: () => void;
+};
+
 export class DiscogsDatabase {
   private db: Database.Database;
 
@@ -377,33 +387,136 @@ export class DiscogsDatabase {
       )
     `);
 
+    // Upgrade existing databases before creating indexes or using newer columns.
+    this.applyPendingMigrations();
+
     // Create indexes for performance
     this.createIndexes();
-
-    // Ensure newer columns exist for existing databases.
-    this.ensureReleaseImportColumns();
     
     // Create triggers for updated_at timestamps
     this.createTriggers();
   }
 
-  private ensureReleaseImportColumns() {
-    const tableInfo = this.db.prepare(`PRAGMA table_info(releases)`).all() as Array<{ name: string }>;
-    const existingColumns = new Set(tableInfo.map((column) => column.name));
-    const requiredColumns: Array<{ name: string; sqlType: string }> = [
-      { name: 'import_source', sqlType: 'TEXT' },
-      { name: 'import_invoice_number', sqlType: 'TEXT' },
-      { name: 'import_invoice_date', sqlType: 'TEXT' },
-      { name: 'imported_via_invoice_at', sqlType: 'TEXT' },
-      { name: 'import_shipping_price', sqlType: 'REAL' },
+  /**
+   * Applies schema-only upgrades once per local database. Migrations must not
+   * reinterpret or reset collection data: an app upgrade must preserve the
+   * user's current sync state.
+   */
+  private applyPendingMigrations(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        id TEXT PRIMARY KEY,
+        applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+
+    const migrations: SchemaMigration[] = [
+      {
+        id: '001_release_availability_tracking',
+        apply: () => this.ensureColumns('releases', [
+          { name: 'no_videos_available', sqlDefinition: 'INTEGER NOT NULL DEFAULT 0' },
+          { name: 'no_condition_available', sqlDefinition: 'INTEGER NOT NULL DEFAULT 0' },
+          { name: 'video_check_attempt_count', sqlDefinition: 'INTEGER NOT NULL DEFAULT 0' },
+          { name: 'condition_check_attempt_count', sqlDefinition: 'INTEGER NOT NULL DEFAULT 0' },
+          { name: 'last_video_check_attempt', sqlDefinition: 'TEXT' },
+          { name: 'last_condition_check_attempt', sqlDefinition: 'TEXT' },
+        ]),
+      },
+      {
+        id: '002_price_retry_tracking',
+        apply: () => this.ensureColumns('prices', [
+          { name: 'no_listing_available', sqlDefinition: 'INTEGER NOT NULL DEFAULT 0' },
+          { name: 'last_check_attempt', sqlDefinition: 'TEXT' },
+          { name: 'check_attempt_count', sqlDefinition: 'INTEGER NOT NULL DEFAULT 0' },
+        ]),
+      },
+      {
+        id: '003_flagging_strategy',
+        apply: () => {
+          this.ensureColumns('prices', [
+            { name: 'price_stale', sqlDefinition: 'INTEGER NOT NULL DEFAULT 0' },
+            { name: 'last_marketplace_check', sqlDefinition: 'TEXT' },
+            { name: 'consecutive_failures', sqlDefinition: 'INTEGER NOT NULL DEFAULT 0' },
+          ]);
+          this.ensureColumns('releases', [
+            { name: 'video_consecutive_failures', sqlDefinition: 'INTEGER NOT NULL DEFAULT 0' },
+            { name: 'condition_consecutive_failures', sqlDefinition: 'INTEGER NOT NULL DEFAULT 0' },
+          ]);
+        },
+      },
+      {
+        id: '004_invoice_import_metadata',
+        apply: () => this.ensureColumns('releases', [
+          { name: 'import_source', sqlDefinition: 'TEXT' },
+          { name: 'import_invoice_number', sqlDefinition: 'TEXT' },
+          { name: 'import_invoice_date', sqlDefinition: 'TEXT' },
+          { name: 'imported_via_invoice_at', sqlDefinition: 'TEXT' },
+          { name: 'import_shipping_price', sqlDefinition: 'REAL' },
+        ]),
+      },
+      {
+        id: '005_database_playlists',
+        apply: () => this.createPlaylistTables(),
+      },
     ];
+
+    const alreadyApplied = this.db.prepare(
+      'SELECT 1 FROM schema_migrations WHERE id = ?',
+    );
+    const recordMigration = this.db.prepare(
+      'INSERT INTO schema_migrations (id) VALUES (?)',
+    );
+
+    for (const migration of migrations) {
+      if (alreadyApplied.get(migration.id)) {
+        continue;
+      }
+
+      this.db.transaction(() => {
+        migration.apply();
+        recordMigration.run(migration.id);
+      })();
+    }
+  }
+
+  private ensureColumns(
+    tableName: 'prices' | 'releases',
+    requiredColumns: ColumnDefinition[],
+  ): void {
+    const tableInfo = this.db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
+    const existingColumns = new Set(tableInfo.map((column) => column.name));
 
     for (const column of requiredColumns) {
       if (existingColumns.has(column.name)) {
         continue;
       }
-      this.db.exec(`ALTER TABLE releases ADD COLUMN ${column.name} ${column.sqlType}`);
+
+      this.db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${column.name} ${column.sqlDefinition}`);
     }
+  }
+
+  private createPlaylistTables(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS playlists (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS playlist_releases (
+        playlist_id TEXT NOT NULL,
+        release_id INTEGER NOT NULL,
+        position INTEGER NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (playlist_id, release_id),
+        FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE,
+        FOREIGN KEY (release_id) REFERENCES releases(id) ON DELETE CASCADE
+      )
+    `);
   }
 
   private createIndexes() {
@@ -456,6 +569,14 @@ export class DiscogsDatabase {
     // Price indexes
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_prices_release_id ON prices(release_id)`);
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_prices_last_updated ON prices(last_updated)`);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_prices_no_listing ON prices(no_listing_available)`);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_prices_stale ON prices(price_stale)`);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_prices_consecutive_failures ON prices(consecutive_failures)`);
+
+    // Playlist indexes
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_playlists_updated_at ON playlists(updated_at)`);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_playlist_releases_playlist_position ON playlist_releases(playlist_id, position)`);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_playlist_releases_release_id ON playlist_releases(release_id)`);
 
     // Sync log indexes
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_sync_logs_release_id ON sync_logs(release_id)`);
@@ -535,6 +656,14 @@ export class DiscogsDatabase {
       AFTER UPDATE ON prices
       BEGIN
         UPDATE prices SET updated_at = datetime('now') WHERE id = NEW.id;
+      END
+    `);
+
+    this.db.exec(`
+      CREATE TRIGGER IF NOT EXISTS update_playlists_updated_at
+      AFTER UPDATE ON playlists
+      BEGIN
+        UPDATE playlists SET updated_at = datetime('now') WHERE id = NEW.id;
       END
     `);
   }
