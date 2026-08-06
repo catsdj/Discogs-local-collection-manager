@@ -43,9 +43,18 @@ pids
 coverage/
 *.lcov
 
-# Playwright test output
+# Playwright (kept local; not published)
+tests/
+playwright.config.ts
+scripts/run-e2e.mjs
 test-results/
 playwright-report/
+
+# Local admin/dev utilities (kept local; not published)
+tools/
+
+# CI workflows (kept local; not published)
+.github/
 
 # nyc test coverage
 .nyc_output

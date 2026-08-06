@@ -222,8 +222,6 @@ Database schema migrations run automatically and are recorded locally in the `sc
 | `npm run security:check` | Check outdated packages and audit                    |
 
 
-The `tools/` directory contains optional manual administration and developer-verification utilities. They are not called by `npm run start` and should not be included in a production deployment artifact.
-
 ## Tech stack
 
 - Next.js (App Router)
