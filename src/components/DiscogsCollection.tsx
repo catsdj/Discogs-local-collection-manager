@@ -20,7 +20,7 @@ import { isValidDiscogsUrl, isValidYouTubeUrl } from '@/lib/clientSecurity';
 import { YouTubePlaylistEmbed } from '@/components/YouTubePlaylistEmbed';
 import { YouTubeVideoEmbed } from '@/components/YouTubeVideoEmbed';
 import { extractYouTubePlaylistId, extractYouTubeVideoId } from '@/lib/urlValidation';
-import { FileText, ListMusic, TrendingUp } from 'lucide-react';
+import { FileText, ListMusic, Search, TrendingUp, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { usePlaylists } from '@/hooks/usePlaylists';
 import SetupRequiredCard from '@/components/SetupRequiredCard';
@@ -148,6 +148,7 @@ interface CollectionData {
 }
 
 interface CollectionFilters {
+  searchFilter: string;
   artistFilter: string;
   titleFilter: string;
   labelFilter: string;
@@ -223,6 +224,8 @@ export default function DiscogsCollection() {
   });
   
   // Filter states
+  const [searchInput, setSearchInput] = useState('');
+  const [searchFilter, setSearchFilter] = useState('');
   const [artistFilter, setArtistFilter] = useState('');
   const [titleFilter, setTitleFilter] = useState('');
   const [labelFilter, setLabelFilter] = useState('');
@@ -250,6 +253,7 @@ export default function DiscogsCollection() {
   }, [selectedStyles]);
 
   const getActiveFilters = (): CollectionFilters => ({
+    searchFilter,
     artistFilter,
     titleFilter,
     labelFilter,
@@ -287,6 +291,9 @@ export default function DiscogsCollection() {
       params.set('include_details', 'true');
     }
 
+    if (filters.searchFilter) {
+      params.set('search', filters.searchFilter);
+    }
     if (filters.artistFilter) {
       params.set('artist', filters.artistFilter);
     }
@@ -506,6 +513,7 @@ export default function DiscogsCollection() {
   // Function to clear a specific column filter
   const clearColumnFilter = (column: string) => {
     const clearedFilters: CollectionFilters = {
+      searchFilter,
       artistFilter,
       titleFilter,
       labelFilter,
@@ -904,6 +912,8 @@ export default function DiscogsCollection() {
   };
 
   const clearAllFilters = () => {
+    setSearchInput('');
+    setSearchFilter('');
     setArtistFilter('');
     setTitleFilter('');
     setLabelFilter('');
@@ -917,6 +927,7 @@ export default function DiscogsCollection() {
     setCurrentPage(1); // Reset to first page when clearing all filters
 
     const clearedFilters: CollectionFilters = {
+      searchFilter: '',
       artistFilter: '',
       titleFilter: '',
       labelFilter: '',
@@ -935,6 +946,51 @@ export default function DiscogsCollection() {
 
   const handleStyleFilterChange = (newStyleFilter: string[]) => {
     setStyleFilter(newStyleFilter);
+  };
+
+  const handleCollectionSearch = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    const nextSearchFilter = searchInput.trim();
+    if (nextSearchFilter === searchFilter) {
+      return;
+    }
+
+    const nextFilters: CollectionFilters = {
+      ...getActiveFilters(),
+      searchFilter: nextSearchFilter,
+    };
+
+    setSearchInput(nextSearchFilter);
+    setSearchFilter(nextSearchFilter);
+    setCurrentPage(1);
+    fetchCollection(selectedStyles, 1, includeDetails, undefined, nextFilters);
+  };
+
+  const clearCollectionSearch = () => {
+    const hadActiveSearch = Boolean(searchFilter);
+    setSearchInput('');
+    setSearchFilter('');
+
+    if (!hadActiveSearch) {
+      return;
+    }
+
+    const nextFilters: CollectionFilters = {
+      ...getActiveFilters(),
+      searchFilter: '',
+    };
+
+    setCurrentPage(1);
+    fetchCollection(selectedStyles, 1, includeDetails, undefined, nextFilters);
+  };
+
+  const handleCollectionSearchInputChange = (value: string) => {
+    setSearchInput(value);
+
+    if (!value && searchFilter) {
+      clearCollectionSearch();
+    }
   };
 
   const handleRowsPerPageChange = (newRowsPerPage: number) => {
@@ -1951,7 +2007,7 @@ export default function DiscogsCollection() {
           onStyleFilterOpenChange={handleStyleFilterOpenChange}
           showClearFilters={
             selectedStyles.length > 0 ||
-            Boolean(artistFilter || titleFilter || labelFilter || yearMinFilter || yearMaxFilter ||
+            Boolean(searchFilter || artistFilter || titleFilter || labelFilter || yearMinFilter || yearMaxFilter ||
               dateAddedMinFilter || dateAddedMaxFilter || yearValueFilter || styleFilter.length > 0)
           }
           onClearFilters={clearAllFilters}
@@ -2065,8 +2121,8 @@ export default function DiscogsCollection() {
                 <div className="space-y-4">
                     {/* Filter Results Summary */}
                     {(() => {
-                      const hasActiveFilters = artistFilter || titleFilter || labelFilter || yearMinFilter || yearMaxFilter || 
-                                             dateAddedMinFilter || dateAddedMaxFilter || yearValueFilter || 
+                      const hasActiveFilters = searchFilter || artistFilter || titleFilter || labelFilter || yearMinFilter || yearMaxFilter ||
+                                             dateAddedMinFilter || dateAddedMaxFilter || yearValueFilter ||
                                              styleFilter.length > 0 || selectedStyles.length > 0;
                       const isSorted = sortColumn !== 'date_added' || sortDirection !== 'desc';
                       
@@ -2104,6 +2160,45 @@ export default function DiscogsCollection() {
                               onSort={handleSort}
                             />
                           )}
+                          <form
+                            className="order-first flex w-full gap-2 sm:w-fit"
+                            onSubmit={handleCollectionSearch}
+                          >
+                            <label className="sr-only" htmlFor="collection-search">
+                              Search collection
+                            </label>
+                            <input
+                              id="collection-search"
+                              data-testid="collection-search-input"
+                              type="search"
+                              value={searchInput}
+                              onChange={(event) => handleCollectionSearchInputChange(event.target.value)}
+                              placeholder="Search artist, title, label, style, or genre"
+                              className="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-3 text-sm shadow-xs outline-none transition-[color,box-shadow] placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                            />
+                            <Button
+                              type="submit"
+                              data-testid="collection-search-submit"
+                              disabled={isCollectionLoading}
+                              className="h-8"
+                            >
+                              <Search className="size-4" aria-hidden="true" />
+                              Search
+                            </Button>
+                            {(searchInput || searchFilter) && (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                data-testid="collection-search-clear"
+                                onClick={clearCollectionSearch}
+                                disabled={isCollectionLoading}
+                                className="h-8"
+                              >
+                                <X className="size-4" aria-hidden="true" />
+                                Clear
+                              </Button>
+                            )}
+                          </form>
                         </div>
                       </div>
                       <div className="flex justify-end">

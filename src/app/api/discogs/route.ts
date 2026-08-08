@@ -82,6 +82,7 @@ export async function GET(request: NextRequest) {
     const sortDirectionParam = searchParams.get('sort_direction') || 'desc';
     const includeDetails = searchParams.get('include_details') === 'true';
     const includeAllDetails = searchParams.get('include_all_details') === 'true';
+    const searchFilter = sanitizeTextParam(searchParams.get('search'));
     const artistFilter = sanitizeTextParam(searchParams.get('artist'));
     const titleFilter = sanitizeTextParam(searchParams.get('title'));
     const labelFilter = sanitizeTextParam(searchParams.get('label'));
@@ -160,6 +161,52 @@ export async function GET(request: NextRequest) {
         )
       `);
       queryParams.push(...selectedStyles);
+    }
+
+    if (searchFilter) {
+      whereConditions.push(`
+        (
+          r.title LIKE ? COLLATE NOCASE
+          OR CAST(r.year AS TEXT) LIKE ?
+          OR EXISTS (
+            SELECT 1
+            FROM release_artists ra_search
+            JOIN artists a_search ON ra_search.artist_id = a_search.id
+            WHERE ra_search.release_id = r.id
+              AND a_search.name LIKE ? COLLATE NOCASE
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM release_labels rl_search
+            JOIN labels l_search ON rl_search.label_id = l_search.id
+            WHERE rl_search.release_id = r.id
+              AND l_search.name LIKE ? COLLATE NOCASE
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM release_styles rs_search
+            JOIN styles s_search ON rs_search.style_id = s_search.id
+            WHERE rs_search.release_id = r.id
+              AND s_search.name LIKE ? COLLATE NOCASE
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM release_genres rg_search
+            JOIN genres g_search ON rg_search.genre_id = g_search.id
+            WHERE rg_search.release_id = r.id
+              AND g_search.name LIKE ? COLLATE NOCASE
+          )
+        )
+      `);
+      const searchPattern = `%${searchFilter}%`;
+      queryParams.push(
+        searchPattern,
+        searchPattern,
+        searchPattern,
+        searchPattern,
+        searchPattern,
+        searchPattern
+      );
     }
 
     if (artistFilter) {
