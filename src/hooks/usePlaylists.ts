@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { DiscogsRelease } from '@/types/discogs';
+import { createInFlightShare, createVisibilityRefreshGate } from '@/lib/sharedRequest';
 
 export interface PlaylistReleaseSnapshot {
   id: number;
@@ -40,6 +41,13 @@ async function fetchPlaylists(): Promise<CollectionPlaylist[]> {
   return Array.isArray(body.playlists) ? body.playlists as CollectionPlaylist[] : [];
 }
 
+const sharePlaylistFetch = createInFlightShare<CollectionPlaylist[]>();
+const playlistVisibilityGate = createVisibilityRefreshGate();
+
+async function loadPlaylists(): Promise<CollectionPlaylist[]> {
+  return sharePlaylistFetch(fetchPlaylists);
+}
+
 async function postPlaylistAction(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
   const response = await fetch('/api/playlists', {
     method: 'POST',
@@ -54,7 +62,7 @@ export function usePlaylists() {
   const [playlists, setPlaylists] = useState<CollectionPlaylist[]>([]);
 
   const refreshPlaylists = useCallback(async (): Promise<CollectionPlaylist[]> => {
-    const nextPlaylists = await fetchPlaylists();
+    const nextPlaylists = await loadPlaylists();
     setPlaylists(nextPlaylists);
     return nextPlaylists;
   }, []);
@@ -64,7 +72,7 @@ export function usePlaylists() {
 
     const initialize = async () => {
       try {
-        const nextPlaylists = await fetchPlaylists();
+        const nextPlaylists = await loadPlaylists();
 
         if (!cancelled) {
           setPlaylists(nextPlaylists);
@@ -74,16 +82,20 @@ export function usePlaylists() {
       }
     };
 
-    const refreshOnFocus = () => {
+    const refreshOnVisibility = () => {
+      if (!playlistVisibilityGate.shouldRefresh(document.visibilityState)) {
+        return;
+      }
+
       void refreshPlaylists().catch((error) => console.error('Failed to refresh playlists:', error));
     };
 
     void initialize();
-    window.addEventListener('focus', refreshOnFocus);
+    document.addEventListener('visibilitychange', refreshOnVisibility);
 
     return () => {
       cancelled = true;
-      window.removeEventListener('focus', refreshOnFocus);
+      document.removeEventListener('visibilitychange', refreshOnVisibility);
     };
   }, [refreshPlaylists]);
 
