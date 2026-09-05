@@ -12,7 +12,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node --test --experimental-strip-types src/lib/discogsOperationPolling.test.ts",
     "setup": "node scripts/setup.cjs",
     "db:init": "node scripts/init-database.cjs",
     "security:audit": "npm audit --production",

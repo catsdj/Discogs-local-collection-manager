@@ -37,6 +37,7 @@ import {
   getCollectionSyncPeriodLabel,
   parseCollectionSyncPeriod,
 } from '@/lib/collectionSyncPeriod';
+import { createOperationStatusPoller } from '@/lib/discogsOperationPolling';
 
 const SETUP_REQUIRED_CODE = 'SETUP_REQUIRED';
 
@@ -171,6 +172,7 @@ export default function DiscogsCollection() {
   const [updateOperation, setUpdateOperation] = useState<DiscogsOperationJob>(idleDiscogsOperation);
   const [syncPeriod, setSyncPeriod] = useState<CollectionSyncPeriod>('all');
   const operationRefreshPendingRef = useRef({ sync: false, update: false });
+  const operationPollerRef = useRef<{ start: () => Promise<void> } | null>(null);
   const [data, setData] = useState<CollectionData | null>(null);
   const [styleFilterOpen, setStyleFilterOpen] = useState(false);
   const [selectedStyles, setSelectedStyles] = useState<string[]>([]);
@@ -686,6 +688,7 @@ export default function DiscogsCollection() {
         toast.error(`Collection import failed: ${result.message || result.error || 'Unknown error'}`);
       } else if (result.job) {
         setUpdateOperation(result.job);
+        void operationPollerRef.current?.start();
         if (action === 'stop') {
           toast.info('Collection import stop requested.');
         } else {
@@ -736,6 +739,7 @@ export default function DiscogsCollection() {
 
       if (result.job) {
         setSyncOperation(result.job);
+        void operationPollerRef.current?.start();
         if (action === 'stop') {
           toast.info('Release-detail refresh stop requested.');
         } else {
@@ -1833,55 +1837,65 @@ export default function DiscogsCollection() {
       refreshAfterOperation();
     };
 
-    const pollOperations = async () => {
-      try {
-        const [syncResponse, updateResponse] = await Promise.all([
-          fetch('/api/discogs/database-sync?action=status'),
-          fetch('/api/discogs/update-collection?action=status'),
-        ]);
-        const [syncResult, updateResult] = await Promise.all([
-          readJsonResponse(syncResponse),
-          readJsonResponse(updateResponse),
-        ]);
+    const poller = createOperationStatusPoller({
+      intervalMs: 2000,
+      poll: async () => {
+        let syncStatus: string | null = null;
+        let updateStatus: string | null = null;
 
-        if (disposed) {
-          return;
-        }
+        try {
+          const [syncResponse, updateResponse] = await Promise.all([
+            fetch('/api/discogs/database-sync?action=status'),
+            fetch('/api/discogs/update-collection?action=status'),
+          ]);
+          const [syncResult, updateResult] = await Promise.all([
+            readJsonResponse(syncResponse),
+            readJsonResponse(updateResponse),
+          ]);
 
-        if (syncResult.job) {
-          const job = syncResult.job as DiscogsOperationJob;
-          setSyncOperation(job);
-          if (job.status === 'running' && job.period) {
-            setSyncPeriod(job.period);
-            localStorage.setItem('collectionSyncPeriod', job.period);
+          if (disposed) {
+            return { syncStatus, updateStatus };
           }
-          handleSyncCompletion(job);
-        }
 
-        if (updateResult.job) {
-          const job = updateResult.job as DiscogsOperationJob;
-          setUpdateOperation(job);
-          if (job.status === 'running' && job.period) {
-            setSyncPeriod(job.period);
-            localStorage.setItem('collectionSyncPeriod', job.period);
+          if (syncResult.job) {
+            const job = syncResult.job as DiscogsOperationJob;
+            syncStatus = job.status;
+            setSyncOperation(job);
+            if (job.status === 'running' && job.period) {
+              setSyncPeriod(job.period);
+              localStorage.setItem('collectionSyncPeriod', job.period);
+            }
+            handleSyncCompletion(job);
           }
-          handleUpdateCompletion(job);
-        }
-      } catch (pollError) {
-        if (!disposed) {
-          console.error('Error polling Discogs operation status:', pollError);
-        }
-      }
-    };
 
-    void pollOperations();
-    const intervalId = window.setInterval(() => {
-      void pollOperations();
-    }, 2000);
+          if (updateResult.job) {
+            const job = updateResult.job as DiscogsOperationJob;
+            updateStatus = job.status;
+            setUpdateOperation(job);
+            if (job.status === 'running' && job.period) {
+              setSyncPeriod(job.period);
+              localStorage.setItem('collectionSyncPeriod', job.period);
+            }
+            handleUpdateCompletion(job);
+          }
+        } catch (pollError) {
+          if (!disposed) {
+            console.error('Error polling Discogs operation status:', pollError);
+          }
+          throw pollError;
+        }
+
+        return { syncStatus, updateStatus };
+      },
+    });
+
+    operationPollerRef.current = poller;
+    void poller.start();
 
     return () => {
       disposed = true;
-      window.clearInterval(intervalId);
+      operationPollerRef.current = null;
+      poller.dispose();
     };
   }, [includeDetails]);
 
