@@ -69,7 +69,8 @@ export function CollectionActionNotes() {
       <p>
         <span className="font-medium text-foreground">Import releases &amp; conditions:</span>{' '}
         reads your Discogs collection, adds releases that are not yet stored locally, and updates media and
-        sleeve conditions. It does not remove local releases or refresh prices, videos, and tracklists.
+        sleeve conditions. A full (All) import also removes local releases that are no longer in your Discogs
+        collection. It does not refresh prices, videos, and tracklists.
       </p>
       <p>
         <span className="font-medium text-foreground">Added within:</span>{' '}

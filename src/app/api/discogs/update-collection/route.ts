@@ -11,6 +11,10 @@ import {
   getCollectionSyncPeriodLabel,
   parseCollectionSyncPeriod,
 } from '@/lib/collectionSyncPeriod';
+import {
+  deleteReleasesNotInDiscogsIds,
+  shouldReconcileCollectionRemovals,
+} from '@/lib/collectionRemovalReconcile';
 
 /**
  * Update Collection API
@@ -39,6 +43,7 @@ type CollectionUpdateJobStatus = {
   results: {
     newReleases: number;
     conditionsUpdated: number;
+    removedReleases: number;
     errors: number;
   };
 };
@@ -56,6 +61,7 @@ const createInitialJobStatus = (): CollectionUpdateJobStatus => ({
   results: {
     newReleases: 0,
     conditionsUpdated: 0,
+    removedReleases: 0,
     errors: 0,
   },
 });
@@ -123,6 +129,7 @@ async function runUpdateCollectionJob(period: CollectionSyncPeriod): Promise<voi
     const db = getDatabase();
     let newReleases = 0;
     let conditionsUpdated = 0;
+    let removedReleases = 0;
     let errors = 0;
 
     console.log(`Starting Update Collection job for releases added within: ${getCollectionSyncPeriodLabel(period)}`);
@@ -130,6 +137,7 @@ async function runUpdateCollectionJob(period: CollectionSyncPeriod): Promise<voi
     let collectionData: any[] = [];
     let page = 1;
     let hasMorePages = true;
+    let pageFetchFailed = false;
 
     while (hasMorePages) {
       if (state.stopRequested) {
@@ -150,6 +158,7 @@ async function runUpdateCollectionJob(period: CollectionSyncPeriod): Promise<voi
 
       if (!response.ok) {
         console.error(`Failed to fetch collection page ${page}: ${response.status}`);
+        pageFetchFailed = true;
         break;
       }
 
@@ -335,10 +344,24 @@ async function runUpdateCollectionJob(period: CollectionSyncPeriod): Promise<voi
       return;
     }
 
+    if (shouldReconcileCollectionRemovals({
+      period,
+      fetchComplete: !pageFetchFailed,
+      stopRequested: state.stopRequested,
+    })) {
+      const fetchedDiscogsIds = collectionData
+        .map((item) => item.basic_information?.id || item.id)
+        .filter((id): id is number => Number.isInteger(id));
+      removedReleases = deleteReleasesNotInDiscogsIds(rawDb, fetchedDiscogsIds);
+      state.status.results.removedReleases = removedReleases;
+    }
+
     state.status.status = 'completed';
     state.status.progress = 100;
     state.status.endTime = new Date();
-    console.log(`Update Collection completed: ${newReleases} new, ${conditionsUpdated} updated, ${errors} errors`);
+    console.log(
+      `Update Collection completed: ${newReleases} new, ${conditionsUpdated} updated, ${removedReleases} removed, ${errors} errors`,
+    );
   } catch (error: any) {
     if (state.stopRequested) {
       markUpdateJobStopped();

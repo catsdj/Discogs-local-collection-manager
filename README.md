@@ -164,7 +164,7 @@ Then set these values in `.env.local`:
 | `DISCOGS_API_TOKEN`   | Yes, for sync | Personal access token from Discogs                 |
 | `DISCOGS_USERNAME`    | Yes, for sync | Your Discogs username                              |
 | `NEXT_PUBLIC_APP_URL` | No            | App base URL (defaults to `http://localhost:3000`) |
-| `ADMIN_TOKEN`         | No            | Protects `/api/performance` in non-dev deployments |
+| `ADMIN_TOKEN`         | No            | Optional lock for `/api/performance` outside `npm run dev` |
 
 
 See `[env.example](env.example)` for the full template and comments.
@@ -192,19 +192,17 @@ If credentials are missing, the UI shows a setup card with steps. API routes tha
 
 If something still fails, check the terminal for warnings about missing `DISCOGS_API_TOKEN` or `DISCOGS_USERNAME`.
 
-### Production deployment
+### Local data
 
-The interactive setup wizard is for a person running the app locally. Do **not** run `npm run setup` in CI, Docker, or another unattended deployment. Set `DISCOGS_API_TOKEN`, `DISCOGS_USERNAME`, `NEXT_PUBLIC_APP_URL`, and (for non-development deployments) `ADMIN_TOKEN` through the host's secret/environment-variable mechanism instead.
+The collection lives in `data/discogs_collection.db` on your machine. Keep that `data/` folder if you copy or back up the app; deleting it drops the local collection.
 
-The application stores its collection in `data/discogs_collection.db`. In production, that directory must be on persistent, writable storage and backed up; an ephemeral filesystem will lose the collection on redeploy. Run a single application replica against each SQLite database file.
-
-Database schema migrations run automatically and are recorded locally in the `schema_migrations` table when the app first opens the database. They are safe to run on every startup and do not reset collection or sync state.
+Database schema migrations run automatically and are recorded in the `schema_migrations` table when the app first opens the database. They are safe to run on every startup and do not reset collection or sync state.
 
 ### Collection actions
 
 **Refresh Details & Prices** processes locally stored releases that have a missing tracklist or video, or a missing or stale marketplace price (prices are rechecked after one week). It refreshes those release details from Discogs. It does **not** add new collection entries or update their media and sleeve conditions.
 
-**Import Releases & Conditions** reads your Discogs collection and creates local records for releases that are not already stored. It also refreshes media and sleeve conditions for releases it finds. This is one-way: it does **not** remove a release from the local database when it has been removed from Discogs, and it does not refresh prices, videos, or tracklists.
+**Import Releases & Conditions** reads your Discogs collection and creates local records for releases that are not already stored. It also refreshes media and sleeve conditions for releases it finds. A full (**All**) import also removes a local release when it is no longer in your Discogs collection. Date-scoped imports do not remove local releases, because they only look at recently added items. This action does not refresh prices, videos, or tracklists.
 
 ## Scripts
 

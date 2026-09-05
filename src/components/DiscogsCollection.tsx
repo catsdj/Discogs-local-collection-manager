@@ -60,6 +60,7 @@ type DiscogsOperationJob = {
     releasesUpdated?: number;
     newReleases?: number;
     conditionsUpdated?: number;
+    removedReleases?: number;
     errors?: number;
   };
 };
@@ -1827,7 +1828,7 @@ export default function DiscogsCollection() {
       operationRefreshPendingRef.current.update = false;
       if (job.status === 'completed') {
         toast.success(
-          `Collection imported: ${job.results?.newReleases || 0} new releases, ${job.results?.conditionsUpdated || 0} conditions updated.`,
+          `Collection imported: ${job.results?.newReleases || 0} new releases, ${job.results?.conditionsUpdated || 0} conditions updated, ${job.results?.removedReleases || 0} removed.`,
         );
       } else if (job.status === 'stopped') {
         toast.info('Collection import stopped.');
