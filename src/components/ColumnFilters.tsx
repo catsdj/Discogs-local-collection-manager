@@ -176,3 +176,49 @@ export function StyleFilter({
   );
 }
 
+interface TagFilterProps {
+  value: string[];
+  onChange: (value: string[]) => void;
+  availableTags: string[];
+  onApply: () => void;
+  onClear: () => void;
+}
+
+export function TagFilter({
+  value,
+  onChange,
+  availableTags,
+  onApply,
+  onClear,
+}: TagFilterProps) {
+  return (
+    <div className="p-3 bg-background border rounded-lg shadow-lg min-w-80">
+      <div className="space-y-2">
+        <div className="text-sm text-muted-foreground">
+          {availableTags.length === 0
+            ? 'No tags yet. Add them on a release.'
+            : `${availableTags.length} tags available`}
+        </div>
+        {availableTags.length > 0 && (
+          <StyleMultiSelect
+            styles={availableTags}
+            selectedStyles={value}
+            onSelectionChange={onChange}
+            placeholder="Select tags to filter..."
+            className="w-full"
+            testId="column-tag-filter"
+          />
+        )}
+        <div className="flex gap-2">
+          <Button size="sm" onClick={onApply} className="flex-1">
+            Apply
+          </Button>
+          <Button size="sm" variant="outline" onClick={onClear}>
+            Clear
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+

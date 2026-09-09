@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
-import { TextFilter, YearRangeFilter, DateRangeFilter, StyleFilter } from './ColumnFilters';
+import { TextFilter, YearRangeFilter, DateRangeFilter, StyleFilter, TagFilter } from './ColumnFilters';
 
 interface FilterDropdownProps {
   column: string;
@@ -19,6 +19,8 @@ interface FilterDropdownProps {
   dateAddedMaxFilter: string;
   styleFilter: string[];
   availableStyles: string[];
+  tagFilter: string[];
+  availableTags: string[];
   // Filter handlers
   onArtistFilterChange: (value: string) => void;
   onTitleFilterChange: (value: string) => void;
@@ -29,6 +31,7 @@ interface FilterDropdownProps {
   onDateAddedMinFilterChange: (value: string) => void;
   onDateAddedMaxFilterChange: (value: string) => void;
   onStyleFilterChange: (value: string[]) => void;
+  onTagFilterChange: (value: string[]) => void;
   onApplyFilters: () => void;
   onClearFilters: () => void;
 }
@@ -52,6 +55,8 @@ const FilterDropdown = forwardRef<FilterDropdownRef, FilterDropdownProps>(({
   dateAddedMaxFilter,
   styleFilter,
   availableStyles,
+  tagFilter,
+  availableTags,
   onArtistFilterChange,
   onTitleFilterChange,
   onLabelFilterChange,
@@ -61,6 +66,7 @@ const FilterDropdown = forwardRef<FilterDropdownRef, FilterDropdownProps>(({
   onDateAddedMinFilterChange,
   onDateAddedMaxFilterChange,
   onStyleFilterChange,
+  onTagFilterChange,
   onApplyFilters,
 }, ref) => {
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -173,6 +179,19 @@ const FilterDropdown = forwardRef<FilterDropdownRef, FilterDropdownProps>(({
             onApply={onApplyFilters}
             onClear={() => {
               onStyleFilterChange([]);
+              onApplyFilters();
+            }}
+          />
+        );
+      case 'tags':
+        return (
+          <TagFilter
+            value={tagFilter}
+            onChange={onTagFilterChange}
+            availableTags={availableTags}
+            onApply={onApplyFilters}
+            onClear={() => {
+              onTagFilterChange([]);
               onApplyFilters();
             }}
           />

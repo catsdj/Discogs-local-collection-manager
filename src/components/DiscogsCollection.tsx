@@ -14,6 +14,7 @@ import {
   TableRow 
 } from '@/components/ui/table';
 import StyleMultiSelect from '@/components/StyleMultiSelect';
+import TagPicker from '@/components/TagPicker';
 import FilterDropdown, { FilterDropdownRef } from '@/components/FilterDropdown';
 import { clearCache, getCacheStats } from '@/lib/cache';
 import { isValidDiscogsUrl, isValidYouTubeUrl } from '@/lib/clientSecurity';
@@ -23,6 +24,8 @@ import { extractYouTubePlaylistId, extractYouTubeVideoId } from '@/lib/urlValida
 import { FileText, ListMusic, Search, TrendingUp, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { usePlaylists } from '@/hooks/usePlaylists';
+import { useTags } from '@/hooks/useTags';
+import type { CollectionTag } from '@/lib/tagName';
 import SetupRequiredCard from '@/components/SetupRequiredCard';
 import CollectionSidebar, {
   COLLECTION_PAGE_SIZES,
@@ -125,6 +128,7 @@ interface DiscogsRelease {
   youtubePlaylistId?: string;
   youtubeVideoId?: string;
   discogsVideos?: Array<{ videoId: string; title: string; duration: string }>;
+  tags?: CollectionTag[];
 }
 
 interface ReleaseDetailsState {
@@ -144,6 +148,7 @@ interface CollectionData {
     items: number;
   };
   availableStyles: string[];
+  availableTags?: string[];
   totalFiltered: number;
   totalCollection: number;
   getAllStyles?: boolean;
@@ -160,6 +165,8 @@ interface CollectionFilters {
   dateAddedMinFilter: string;
   dateAddedMaxFilter: string;
   styleFilter: string[];
+  tagFilter: string[];
+  selectedTags: string[];
 }
 
 export default function DiscogsCollection() {
@@ -168,6 +175,11 @@ export default function DiscogsCollection() {
     playlists,
     toggleReleaseInPlaylist,
   } = usePlaylists();
+  const {
+    tags: tagVocabulary,
+    addTagToRelease,
+    removeTagFromRelease,
+  } = useTags();
   const [isCollectionLoading, setIsCollectionLoading] = useState(false);
   const [syncOperation, setSyncOperation] = useState<DiscogsOperationJob>(idleDiscogsOperation);
   const [updateOperation, setUpdateOperation] = useState<DiscogsOperationJob>(idleDiscogsOperation);
@@ -176,7 +188,9 @@ export default function DiscogsCollection() {
   const operationPollerRef = useRef<{ start: () => Promise<void> } | null>(null);
   const [data, setData] = useState<CollectionData | null>(null);
   const [styleFilterOpen, setStyleFilterOpen] = useState(false);
+  const [tagFilterOpen, setTagFilterOpen] = useState(false);
   const [selectedStyles, setSelectedStyles] = useState<string[]>([]);
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [setupStatus, setSetupStatus] = useState<SetupInfo | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
@@ -238,6 +252,7 @@ export default function DiscogsCollection() {
   const [dateAddedMaxFilter, setDateAddedMaxFilter] = useState('');
   const [yearValueFilter, setYearValueFilter] = useState('');
   const [styleFilter, setStyleFilter] = useState<string[]>([]);
+  const [tagFilter, setTagFilter] = useState<string[]>([]);
   
   // Sorting state
   const [sortColumn, setSortColumn] = useState<string>('date_added');
@@ -250,10 +265,15 @@ export default function DiscogsCollection() {
   const searchedReleaseIdsRef = useRef<Set<number>>(new Set());
   const searchingReleaseIdRef = useRef<number | null>(null);
   const selectedStylesRef = useRef<string[]>([]);
+  const selectedTagsRef = useRef<string[]>([]);
 
   useEffect(() => {
     selectedStylesRef.current = selectedStyles;
   }, [selectedStyles]);
+
+  useEffect(() => {
+    selectedTagsRef.current = selectedTags;
+  }, [selectedTags]);
 
   const getActiveFilters = (): CollectionFilters => ({
     searchFilter,
@@ -266,6 +286,8 @@ export default function DiscogsCollection() {
     dateAddedMinFilter,
     dateAddedMaxFilter,
     styleFilter,
+    tagFilter,
+    selectedTags,
   });
 
   const buildCollectionParams = (
@@ -323,6 +345,12 @@ export default function DiscogsCollection() {
     }
     if (filters.styleFilter.length > 0) {
       params.set('style_filter', filters.styleFilter.join(','));
+    }
+    if (filters.tagFilter.length > 0) {
+      params.set('tag_filter', filters.tagFilter.join(','));
+    }
+    if (filters.selectedTags.length > 0) {
+      params.set('tags', filters.selectedTags.join(','));
     }
 
     return params;
@@ -506,6 +534,8 @@ export default function DiscogsCollection() {
         return !!(yearMinFilter || yearMaxFilter || yearValueFilter);
       case 'styles':
         return styleFilter.length > 0;
+      case 'tags':
+        return tagFilter.length > 0;
       case 'date_added':
         return !!(dateAddedMinFilter || dateAddedMaxFilter);
       default:
@@ -526,6 +556,8 @@ export default function DiscogsCollection() {
       dateAddedMinFilter,
       dateAddedMaxFilter,
       styleFilter,
+      tagFilter,
+      selectedTags,
     };
 
     switch (column) {
@@ -552,6 +584,10 @@ export default function DiscogsCollection() {
       case 'styles':
         setStyleFilter([]);
         clearedFilters.styleFilter = [];
+        break;
+      case 'tags':
+        setTagFilter([]);
+        clearedFilters.tagFilter = [];
         break;
       case 'date_added':
         setDateAddedMinFilter('');
@@ -654,10 +690,66 @@ export default function DiscogsCollection() {
     }
   };
 
+  const handleTagSelectionChange = (newSelectedTags: string[]) => {
+    selectedTagsRef.current = newSelectedTags;
+    setSelectedTags(newSelectedTags);
+    setCurrentPage(1);
+    if (!tagFilterOpen) {
+      fetchCollection(selectedStyles, 1, includeDetails, undefined, { selectedTags: newSelectedTags });
+    }
+  };
+
+  const handleTagFilterOpenChange = (open: boolean) => {
+    setTagFilterOpen(open);
+    if (!open) {
+      fetchCollection(selectedStyles, 1, includeDetails, undefined, {
+        selectedTags: selectedTagsRef.current,
+      });
+    }
+  };
+
+  const patchReleaseTags = (releaseId: number, nextTags: CollectionTag[]) => {
+    setData((current) => {
+      if (!current) {
+        return current;
+      }
+
+      return {
+        ...current,
+        releases: current.releases.map((release) => (
+          release.basic_information.id === releaseId
+            ? { ...release, tags: nextTags }
+            : release
+        )),
+      };
+    });
+  };
+
+  const handleAddReleaseTag = async (release: DiscogsRelease, name: string) => {
+    try {
+      const nextTags = await addTagToRelease(release.basic_information.id, name);
+      patchReleaseTags(release.basic_information.id, nextTags);
+    } catch (error) {
+      console.error('Failed to add tag:', error);
+      toast.error('Failed to add tag');
+    }
+  };
+
+  const handleRemoveReleaseTag = async (release: DiscogsRelease, tagId: number) => {
+    try {
+      const nextTags = await removeTagFromRelease(release.basic_information.id, tagId);
+      patchReleaseTags(release.basic_information.id, nextTags);
+    } catch (error) {
+      console.error('Failed to remove tag:', error);
+      toast.error('Failed to remove tag');
+    }
+  };
+
   const clearFilters = () => {
     setSelectedStyles([]);
+    setSelectedTags([]);
     setCurrentPage(1); // Reset to first page when clearing style filters
-    fetchCollection([], 1, includeDetails); // Use fetchCollection with empty styles to get all records
+    fetchCollection([], 1, includeDetails, undefined, { selectedTags: [] });
   };
 
   const handlePageChange = (page: number) => {
@@ -928,7 +1020,9 @@ export default function DiscogsCollection() {
     setDateAddedMaxFilter('');
     setYearValueFilter('');
     setStyleFilter([]);
+    setTagFilter([]);
     setSelectedStyles([]);
+    setSelectedTags([]);
     setCurrentPage(1); // Reset to first page when clearing all filters
 
     const clearedFilters: CollectionFilters = {
@@ -942,6 +1036,8 @@ export default function DiscogsCollection() {
       dateAddedMinFilter: '',
       dateAddedMaxFilter: '',
       styleFilter: [],
+      tagFilter: [],
+      selectedTags: [],
     };
 
     window.setTimeout(() => {
@@ -1287,6 +1383,17 @@ export default function DiscogsCollection() {
                       4,
                       'border border-blue-200 bg-blue-100 text-blue-800'
                     )}
+                  </div>
+
+                  <div>
+                    <div className="text-sm font-medium text-gray-700 mb-1">Tag</div>
+                    <TagPicker
+                      assignedTags={release.tags || []}
+                      vocabulary={tagVocabulary}
+                      onAdd={(name) => handleAddReleaseTag(release, name)}
+                      onRemove={(tagId) => handleRemoveReleaseTag(release, tagId)}
+                      testId={`release-tag-picker-${release.basic_information.id}`}
+                    />
                   </div>
                   </div>
                 </div>
@@ -2020,10 +2127,16 @@ export default function DiscogsCollection() {
           onStyleSelectionChange={handleStyleSelectionChange}
           styleFilterOpen={styleFilterOpen}
           onStyleFilterOpenChange={handleStyleFilterOpenChange}
+          allAvailableTags={tagVocabulary.map((tag) => tag.name)}
+          selectedTags={selectedTags}
+          onTagSelectionChange={handleTagSelectionChange}
+          tagFilterOpen={tagFilterOpen}
+          onTagFilterOpenChange={handleTagFilterOpenChange}
           showClearFilters={
             selectedStyles.length > 0 ||
+            selectedTags.length > 0 ||
             Boolean(searchFilter || artistFilter || titleFilter || labelFilter || yearMinFilter || yearMaxFilter ||
-              dateAddedMinFilter || dateAddedMaxFilter || yearValueFilter || styleFilter.length > 0)
+              dateAddedMinFilter || dateAddedMaxFilter || yearValueFilter || styleFilter.length > 0 || tagFilter.length > 0)
           }
           onClearFilters={clearAllFilters}
         />
@@ -2087,7 +2200,7 @@ export default function DiscogsCollection() {
                     </Button>
                   )}
                 </div>
-              {selectedStyles.length > 0 && (
+              {selectedStyles.length > 0 || selectedTags.length > 0 ? (
                 <Button
                   variant="outline"
                   onClick={clearFilters}
@@ -2095,7 +2208,7 @@ export default function DiscogsCollection() {
                 >
                   Clear Filters
                 </Button>
-              )}
+              ) : null}
             </div>
 
             {error && (
@@ -2133,12 +2246,39 @@ export default function DiscogsCollection() {
                   )}
                 </div>
 
+                <div className="space-y-2 lg:hidden">
+                  <h3 className="text-sm font-medium">
+                    Quick Tag Filter:
+                    {tagVocabulary.length > 0 && (
+                      <span className="text-muted-foreground ml-2">
+                        ({tagVocabulary.length} tags available)
+                      </span>
+                    )}
+                  </h3>
+                  {tagVocabulary.length > 0 ? (
+                    <StyleMultiSelect
+                      styles={tagVocabulary.map((tag) => tag.name)}
+                      selectedStyles={selectedTags}
+                      onSelectionChange={handleTagSelectionChange}
+                      open={tagFilterOpen}
+                      onOpenChange={handleTagFilterOpenChange}
+                      placeholder="Select tags to filter..."
+                      className="w-full"
+                      testId="mobile-tag-filter"
+                    />
+                  ) : (
+                    <div className="text-sm text-muted-foreground">
+                      {isCollectionLoading ? 'Loading tags...' : 'No tags yet. Add them on a release.'}
+                    </div>
+                  )}
+                </div>
+
                 <div className="space-y-4">
                     {/* Filter Results Summary */}
                     {(() => {
                       const hasActiveFilters = searchFilter || artistFilter || titleFilter || labelFilter || yearMinFilter || yearMaxFilter ||
                                              dateAddedMinFilter || dateAddedMaxFilter || yearValueFilter ||
-                                             styleFilter.length > 0 || selectedStyles.length > 0;
+                                             styleFilter.length > 0 || tagFilter.length > 0 || selectedStyles.length > 0 || selectedTags.length > 0;
                       const isSorted = sortColumn !== 'date_added' || sortDirection !== 'desc';
                       
                       return (
@@ -2406,6 +2546,33 @@ export default function DiscogsCollection() {
                                 )}
                               </div>
                             </TableHead>
+                            <TableHead className="whitespace-nowrap bg-background border-b w-56">
+                              <div className="flex items-center gap-1">
+                                <span>Tag</span>
+                                <span
+                                  className={`text-xs cursor-pointer transition-colors ${
+                                    hasActiveFilter('tags')
+                                      ? 'text-blue-600'
+                                      : 'text-muted-foreground hover:text-blue-600'
+                                  }`}
+                                  onClick={(e) => handleFilterClick('tags', e)}
+                                >
+                                  🔍
+                                </span>
+                                {hasActiveFilter('tags') && (
+                                  <button
+                                    className="text-xs text-red-600 hover:text-red-800 ml-1"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      clearColumnFilter('tags');
+                                    }}
+                                    title="Clear filter"
+                                  >
+                                    ✕
+                                  </button>
+                                )}
+                              </div>
+                            </TableHead>
                             <TableHead 
                               className="whitespace-nowrap bg-background border-b cursor-pointer hover:bg-muted/50 transition-colors"
                               onClick={() => handleSort('date_added')}
@@ -2545,6 +2712,16 @@ export default function DiscogsCollection() {
                               </TableCell>
                               <TableCell className="w-32">
                                 {renderStyleChips(release.basic_information.styles, 5)}
+                              </TableCell>
+                              <TableCell className="min-w-56 align-top">
+                                <TagPicker
+                                  assignedTags={release.tags || []}
+                                  vocabulary={tagVocabulary}
+                                  compact
+                                  onAdd={(name) => handleAddReleaseTag(release, name)}
+                                  onRemove={(tagId) => handleRemoveReleaseTag(release, tagId)}
+                                  testId={`table-tag-picker-${release.basic_information.id}`}
+                                />
                               </TableCell>
                               <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
                                 {new Date(release.date_added).toLocaleDateString()}
@@ -2774,6 +2951,8 @@ export default function DiscogsCollection() {
                       dateAddedMaxFilter={dateAddedMaxFilter}
                       styleFilter={styleFilter}
                       availableStyles={allAvailableStyles}
+                      tagFilter={tagFilter}
+                      availableTags={tagVocabulary.map((tag) => tag.name)}
                       onArtistFilterChange={setArtistFilter}
                       onTitleFilterChange={setTitleFilter}
                       onLabelFilterChange={setLabelFilter}
@@ -2783,6 +2962,7 @@ export default function DiscogsCollection() {
                       onDateAddedMinFilterChange={setDateAddedMinFilter}
                       onDateAddedMaxFilterChange={setDateAddedMaxFilter}
                       onStyleFilterChange={setStyleFilter}
+                      onTagFilterChange={setTagFilter}
                       onApplyFilters={applyFilters}
                       onClearFilters={clearAllFilters}
                     />

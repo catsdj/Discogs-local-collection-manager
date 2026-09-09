@@ -4,6 +4,7 @@ import { getDatabase } from '@/lib/database';
 import { getDatabaseSyncService } from '@/lib/databaseSyncService';
 import { withTiming } from '@/lib/performance';
 import { rejectIfNotLocal } from '@/lib/requestSecurity';
+import { listTags, loadTagsByDiscogsIds } from '@/lib/tags';
 import type { 
   DatabaseReleaseRow, 
   DatabaseVideoRow, 
@@ -92,6 +93,8 @@ export async function GET(request: NextRequest) {
     const dateAddedMin = parseOptionalDate(searchParams.get('date_added_min'));
     const dateAddedMax = parseOptionalDate(searchParams.get('date_added_max'));
     const styleFilter = sanitizeListParam(searchParams.get('style_filter'));
+    const selectedTags = sanitizeListParam(searchParams.get('tags'));
+    const tagFilter = sanitizeListParam(searchParams.get('tag_filter'));
     const shouldIncludeDetails = includeDetails || includeAllDetails;
 
     // Validate and sanitize inputs
@@ -279,6 +282,20 @@ export async function GET(request: NextRequest) {
       styleFilter.forEach((style) => queryParams.push(`%${style}%`));
     }
 
+    const tagNames = [...selectedTags, ...tagFilter].filter((name, index, names) => names.indexOf(name) === index);
+    if (tagNames.length > 0) {
+      const tagPlaceholders = tagNames.map(() => '?').join(',');
+      whereConditions.push(`
+        r.id IN (
+          SELECT rt.release_id
+          FROM release_tags rt
+          JOIN tags t ON rt.tag_id = t.id
+          WHERE t.normalized_name IN (${tagPlaceholders})
+        )
+      `);
+      queryParams.push(...tagNames.map((name) => name.toLowerCase()));
+    }
+
     const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
 
     const totalCollectionResult = db.getDb().prepare('SELECT COUNT(*) as total FROM releases').get() as { total: number };
@@ -342,6 +359,11 @@ export async function GET(request: NextRequest) {
       { page, perPage, selectedStyles: selectedStyles.length }
     );
 
+    const tagsByDiscogsId = loadTagsByDiscogsIds(
+      db.getDb(),
+      releases.map((release) => release.discogs_id),
+    );
+
     // Transform releases to match the expected format
     let transformedReleases = releases.map(release => ({
       id: release.discogs_id,
@@ -355,6 +377,7 @@ export async function GET(request: NextRequest) {
         genres: release.genres ? release.genres.split(',').map((g: string) => g.trim()) : [],
         labels: release.labels ? release.labels.split(',').map((name: string) => ({ name: name.trim() })) : []
       },
+      tags: tagsByDiscogsId.get(release.discogs_id) || [],
       date_added: release.date_added,
       media_condition: release.media_condition || 'Unknown',
       sleeve_condition: release.sleeve_condition || 'Unknown',
@@ -473,6 +496,7 @@ export async function GET(request: NextRequest) {
     // PHASE 4: Build final response with metadata
     // ============================================================
     const allStyles = db.getDb().prepare('SELECT DISTINCT name FROM styles ORDER BY name').all() as DatabaseStyleRow[];
+    const availableTags = listTags(db.getDb());
 
     const response = {
       releases: transformedReleases,
@@ -483,6 +507,7 @@ export async function GET(request: NextRequest) {
         items: total
       },
       availableStyles: allStyles.map(s => s.name),
+      availableTags: availableTags.map((tag) => tag.name),
       totalFiltered: total,
       totalCollection: totalCollectionResult.total,
       includeDetails: shouldIncludeDetails

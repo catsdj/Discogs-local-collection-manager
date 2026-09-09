@@ -50,9 +50,15 @@ export interface DiscogsBasicInformation {
   labels: DiscogsLabel[];
 }
 
+export interface CollectionTag {
+  id: number;
+  name: string;
+}
+
 export interface DiscogsRelease {
   id: number;
   basic_information: DiscogsBasicInformation;
+  tags?: CollectionTag[];
   date_added: string;
   media_condition?: string;
   sleeve_condition?: string;
@@ -76,6 +82,7 @@ export interface CollectionData {
   releases: DiscogsRelease[];
   pagination: DiscogsPagination;
   availableStyles: string[];
+  availableTags?: string[];
   totalFiltered: number;
   totalCollection: number;
   getAllStyles?: boolean;

@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
+import { createTagTables } from './tags';
 
 const DB_PATH = path.join(process.cwd(), 'data', 'discogs_collection.db');
 
@@ -458,6 +459,10 @@ export class DiscogsDatabase {
         id: '005_database_playlists',
         apply: () => this.createPlaylistTables(),
       },
+      {
+        id: '006_collection_tags',
+        apply: () => createTagTables(this.db),
+      },
     ];
 
     const alreadyApplied = this.db.prepare(
@@ -577,6 +582,10 @@ export class DiscogsDatabase {
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_playlists_updated_at ON playlists(updated_at)`);
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_playlist_releases_playlist_position ON playlist_releases(playlist_id, position)`);
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_playlist_releases_release_id ON playlist_releases(release_id)`);
+
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_tags_normalized_name ON tags(normalized_name)`);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_release_tags_release_id ON release_tags(release_id)`);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_release_tags_tag_id ON release_tags(tag_id)`);
 
     // Sync log indexes
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_sync_logs_release_id ON sync_logs(release_id)`);

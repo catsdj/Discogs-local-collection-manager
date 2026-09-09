@@ -213,6 +213,11 @@ export interface CollectionSidebarProps {
   onStyleSelectionChange: (styles: string[]) => void;
   styleFilterOpen: boolean;
   onStyleFilterOpenChange: (open: boolean) => void;
+  allAvailableTags: string[];
+  selectedTags: string[];
+  onTagSelectionChange: (tags: string[]) => void;
+  tagFilterOpen: boolean;
+  onTagFilterOpenChange: (open: boolean) => void;
   showClearFilters: boolean;
   onClearFilters: () => void;
 }
@@ -234,6 +239,11 @@ const CollectionSidebar = memo(function CollectionSidebar({
   onStyleSelectionChange,
   styleFilterOpen,
   onStyleFilterOpenChange,
+  allAvailableTags,
+  selectedTags,
+  onTagSelectionChange,
+  tagFilterOpen,
+  onTagFilterOpenChange,
   showClearFilters,
   onClearFilters,
 }: CollectionSidebarProps) {
@@ -265,6 +275,30 @@ const CollectionSidebar = memo(function CollectionSidebar({
               <Button variant="outline" onClick={onClearFilters} disabled={isCollectionLoading} className="w-full">
                 Clear Filters
               </Button>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-lg py-4">
+          <CardHeader className="px-4 pb-2">
+            <CardTitle className="text-base">Tags Filter</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 px-4">
+            {allAvailableTags.length > 0 ? (
+              <StyleMultiSelect
+                styles={allAvailableTags}
+                selectedStyles={selectedTags}
+                onSelectionChange={onTagSelectionChange}
+                open={tagFilterOpen}
+                onOpenChange={onTagFilterOpenChange}
+                placeholder="Select tags..."
+                className="w-full"
+                testId="sidebar-tag-filter"
+              />
+            ) : (
+              <div className="text-sm text-muted-foreground">
+                {isCollectionLoading ? 'Loading tags...' : 'No tags yet. Add them on a release.'}
+              </div>
             )}
           </CardContent>
         </Card>
