@@ -22,11 +22,6 @@ export interface DatabaseReleaseRow {
   sync_status: 'pending' | 'synced' | 'failed';
   lowest_price: number | null;
   currency: string | null;
-  // Aggregated fields from GROUP_CONCAT (comma-separated strings)
-  artists: string | null;
-  styles: string | null;
-  genres: string | null;
-  labels: string | null;
 }
 
 /**

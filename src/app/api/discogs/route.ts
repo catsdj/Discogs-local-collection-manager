@@ -4,6 +4,14 @@ import { getDatabase } from '@/lib/database';
 import { getDatabaseSyncService } from '@/lib/databaseSyncService';
 import { withTiming } from '@/lib/performance';
 import { rejectIfNotLocal } from '@/lib/requestSecurity';
+import {
+  addReleaseStyleFilter,
+  firstRelationOrderBy,
+  loadReleaseNameLists,
+  sanitizeListParam,
+  sanitizeTextParam,
+  uniqueNormalizedNames,
+} from '@/lib/collectionQuery';
 import { listTags, loadTagsByDiscogsIds } from '@/lib/tags';
 import type { 
   DatabaseReleaseRow, 
@@ -25,25 +33,6 @@ if (!syncServiceInitialized) {
   } catch (error) {
     console.error('❌ Failed to initialize database sync service:', error);
   }
-}
-
-function sanitizeTextParam(value: string | null, maxLength: number = 100): string {
-  if (!value) {
-    return '';
-  }
-
-  return value.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, maxLength);
-}
-
-function sanitizeListParam(value: string | null, itemMaxLength: number = 60): string[] {
-  if (!value) {
-    return [];
-  }
-
-  return value
-    .split(',')
-    .map((item) => sanitizeTextParam(item, itemMaxLength))
-    .filter(Boolean);
 }
 
 function parseOptionalInteger(value: string | null, min: number, max: number): number | null {
@@ -132,11 +121,11 @@ export async function GET(request: NextRequest) {
         case 'year':
           return `ORDER BY r.year ${sortDir.toUpperCase()}`;
         case 'artist':
-          return `ORDER BY COALESCE(a.name, '') ${sortDir.toUpperCase()}`;
+          return firstRelationOrderBy('artist', sortDir.toUpperCase() as 'ASC' | 'DESC');
         case 'label':
-          return `ORDER BY COALESCE(l.name, '') ${sortDir.toUpperCase()}`;
+          return firstRelationOrderBy('label', sortDir.toUpperCase() as 'ASC' | 'DESC');
         case 'styles':
-          return `ORDER BY COALESCE(s.name, '') ${sortDir.toUpperCase()}`;
+          return firstRelationOrderBy('styles', sortDir.toUpperCase() as 'ASC' | 'DESC');
         case 'condition':
           return `ORDER BY COALESCE(r.media_condition, '') ${sortDir.toUpperCase()}, COALESCE(r.sleeve_condition, '') ${sortDir.toUpperCase()}`;
         case 'lowest_price':
@@ -152,19 +141,7 @@ export async function GET(request: NextRequest) {
     const whereConditions: string[] = [];
     const queryParams: any[] = [];
 
-    // Style filter
-    if (selectedStyles.length > 0) {
-      const stylePlaceholders = selectedStyles.map(() => '?').join(',');
-      whereConditions.push(`
-        r.id IN (
-          SELECT rs.release_id 
-          FROM release_styles rs 
-          JOIN styles s ON rs.style_id = s.id 
-          WHERE s.name IN (${stylePlaceholders})
-        )
-      `);
-      queryParams.push(...selectedStyles);
-    }
+    addReleaseStyleFilter(whereConditions, queryParams, [...selectedStyles, ...styleFilter]);
 
     if (searchFilter) {
       whereConditions.push(`
@@ -268,21 +245,7 @@ export async function GET(request: NextRequest) {
       queryParams.push(dateAddedMax);
     }
 
-    if (styleFilter.length > 0) {
-      const styleConditions = styleFilter.map(() => `s_filter.name LIKE ? COLLATE NOCASE`).join(' OR ');
-      whereConditions.push(`
-        EXISTS (
-          SELECT 1
-          FROM release_styles rs_filter
-          JOIN styles s_filter ON rs_filter.style_id = s_filter.id
-          WHERE rs_filter.release_id = r.id
-            AND (${styleConditions})
-        )
-      `);
-      styleFilter.forEach((style) => queryParams.push(`%${style}%`));
-    }
-
-    const tagNames = [...selectedTags, ...tagFilter].filter((name, index, names) => names.indexOf(name) === index);
+    const tagNames = uniqueNormalizedNames([...selectedTags, ...tagFilter]);
     if (tagNames.length > 0) {
       const tagPlaceholders = tagNames.map(() => '?').join(',');
       whereConditions.push(`
@@ -313,7 +276,6 @@ export async function GET(request: NextRequest) {
     const totalPages = Math.max(1, Math.ceil(total / perPage));
     const offset = (page - 1) * perPage;
 
-    // Get releases with all related data
     const releasesQuery = `
       SELECT 
         r.id,
@@ -329,29 +291,16 @@ export async function GET(request: NextRequest) {
         r.last_sync_at,
         r.sync_status,
         p.lowest_price,
-        p.currency,
-        GROUP_CONCAT(DISTINCT a.name) as artists,
-        GROUP_CONCAT(DISTINCT s.name) as styles,
-        GROUP_CONCAT(DISTINCT g.name) as genres,
-        GROUP_CONCAT(DISTINCT l.name) as labels
+        p.currency
       FROM releases r
-      LEFT JOIN release_artists ra ON r.id = ra.release_id
-      LEFT JOIN artists a ON ra.artist_id = a.id
-      LEFT JOIN release_styles rs ON r.id = rs.release_id
-      LEFT JOIN styles s ON rs.style_id = s.id
-      LEFT JOIN release_genres rg ON r.id = rg.release_id
-      LEFT JOIN genres g ON rg.genre_id = g.id
-      LEFT JOIN release_labels rl ON r.id = rl.release_id
-      LEFT JOIN labels l ON rl.label_id = l.id
       LEFT JOIN prices p ON r.id = p.release_id
       ${whereClause}
-      GROUP BY r.id
       ${getOrderByClause(sortColumn, sortDirection)}
       LIMIT ? OFFSET ?
     `;
 
     // ============================================================
-    // PHASE 1: Query base release data with aggregated relationships
+    // PHASE 1: Query base release data
     // ============================================================
     const releases = await withTiming(
       'fetch-releases-main-query',
@@ -363,36 +312,42 @@ export async function GET(request: NextRequest) {
       db.getDb(),
       releases.map((release) => release.discogs_id),
     );
+    const nameLists = loadReleaseNameLists(
+      db.getDb(),
+      releases.map((release) => release.id),
+    );
 
     // Transform releases to match the expected format
-    let transformedReleases = releases.map(release => ({
-      id: release.discogs_id,
-      basic_information: {
+    let transformedReleases = releases.map(release => {
+      const names = nameLists.get(release.id);
+      return {
         id: release.discogs_id,
-        title: release.title,
-        year: release.year || 0,
-        cover_image: release.cover_image_url || '',
-        artists: release.artists ? release.artists.split(',').map((name: string) => ({ name: name.trim() })) : [],
-        styles: release.styles ? release.styles.split(',').map((s: string) => s.trim()) : [],
-        genres: release.genres ? release.genres.split(',').map((g: string) => g.trim()) : [],
-        labels: release.labels ? release.labels.split(',').map((name: string) => ({ name: name.trim() })) : []
-      },
-      tags: tagsByDiscogsId.get(release.discogs_id) || [],
-      date_added: release.date_added,
-      media_condition: release.media_condition || 'Unknown',
-      sleeve_condition: release.sleeve_condition || 'Unknown',
-      videos: [], // Will be populated from database
-      tracklist: [], // Will be populated from database
-      priceInfo: release.lowest_price ? {
-        lowest_price: release.lowest_price,
-        currency: release.currency || 'USD'
-      } : null,
-      // Database-specific fields
-      created_at: release.created_at,
-      updated_at: release.updated_at,
-      last_sync_at: release.last_sync_at,
-      sync_status: release.sync_status
-    }));
+        basic_information: {
+          id: release.discogs_id,
+          title: release.title,
+          year: release.year || 0,
+          cover_image: release.cover_image_url || '',
+          artists: (names?.artists || []).map((name) => ({ name })),
+          styles: names?.styles || [],
+          genres: names?.genres || [],
+          labels: (names?.labels || []).map((name) => ({ name }))
+        },
+        tags: tagsByDiscogsId.get(release.discogs_id) || [],
+        date_added: release.date_added,
+        media_condition: release.media_condition || 'Unknown',
+        sleeve_condition: release.sleeve_condition || 'Unknown',
+        videos: [], // Will be populated from database
+        tracklist: [], // Will be populated from database
+        priceInfo: release.lowest_price ? {
+          lowest_price: release.lowest_price,
+          currency: release.currency || 'USD'
+        } : null,
+        created_at: release.created_at,
+        updated_at: release.updated_at,
+        last_sync_at: release.last_sync_at,
+        sync_status: release.sync_status
+      };
+    });
 
     // ============================================================
     // PHASE 2: Batch fetch related data (videos & tracks)

@@ -1,12 +1,12 @@
 import type Database from 'better-sqlite3';
-import { parseTagName, type CollectionTag, type ParsedTagName } from './tagName';
+import { parseTagName, type CollectionTag, type ParsedTagName } from './tagName.ts';
 
 export {
   MAX_TAG_NAME_LENGTH,
   parseTagName,
   suggestTags,
-} from './tagName';
-export type { CollectionTag, ParsedTagName } from './tagName';
+} from './tagName.ts';
+export type { CollectionTag, ParsedTagName } from './tagName.ts';
 
 type TagRow = {
   id: number;

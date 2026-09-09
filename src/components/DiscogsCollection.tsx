@@ -303,8 +303,6 @@ export default function DiscogsCollection() {
 
     if (styles.length > 0) {
       params.set('styles', styles.join(','));
-    } else {
-      params.set('get_all_styles', 'true');
     }
 
     params.set('page', page.toString());
@@ -653,8 +651,7 @@ export default function DiscogsCollection() {
         setCurrentPage(page);
         setIncludeDetails(Boolean(result.includeDetails));
         
-        // Update available styles if we got new ones
-        if (result.availableStyles && result.availableStyles.length > 0) {
+        if (Array.isArray(result.availableStyles)) {
           setAllAvailableStyles(result.availableStyles);
         }
       }
